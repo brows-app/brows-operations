@@ -911,7 +911,18 @@ public sealed class OperatorTests {
                 Assert.That(whileRunning.CanCancel, Is.True);
                 Assert.That(whileRunning.CanRemove, Is.False);
                 Assert.That(whileCanceling.CanCancel, Is.False);
-                Assert.That(whileCanceling.CanRemove, Is.EqualTo(whileCanceling.Complete));
+                /*
+                 * On .NET Framework, canceling the token source runs the delegate's awaiting continuation inline,
+                 * so the operation completes (and becomes removable) before Cancel() returns. On .NET (Core),
+                 * that continuation is queued, so the operation is still completing when Cancel() returns.
+                 */
+#if NETFRAMEWORK
+                Assert.That(whileCanceling.Complete, Is.True);
+                Assert.That(whileCanceling.CanRemove, Is.True);
+#else
+                Assert.That(whileCanceling.Complete, Is.False);
+                Assert.That(whileCanceling.CanRemove, Is.False);
+#endif
                 Assert.That(afterCompletion.CanCancel, Is.False);
                 Assert.That(afterCompletion.CanRemove, Is.True);
             }

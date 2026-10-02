@@ -9,7 +9,9 @@ namespace Brows.Windows.Controls;
 /// <remarks>
 /// Supports the built-in operators created by <c>IOperatorFactory</c>. Relevant operations and
 /// their ancestor paths are displayed with progress, errors, and cancellation or removal commands.
-/// Access the control and its operator on the WPF dispatcher.
+/// Access the control and start operations on the WPF dispatcher so Operate captures its
+/// synchronization context for root and child collection changes. Progress reports may run on
+/// worker threads; property-change notifications are not dispatched by the operations library.
 /// </remarks>
 sealed partial class OperatorControl {
     static OperatorControl() {

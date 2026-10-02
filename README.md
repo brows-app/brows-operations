@@ -48,7 +48,11 @@ Successful root operations are removed from the collection when they finish. Fai
 
 ## UI scheduling
 
-The library is designed for a single-threaded UI synchronization context, such as the WPF dispatcher. Call `Operate` on that context and report progress from continuations that return to it. Avoid `ConfigureAwait(false)` before calling the progress API; progress updates and notifications are expected to run sequentially on the UI context.
+Each `Operate` call captures `SynchronizationContext.Current` and passes it to the root operation and all descendants. Root and child additions, automatic root cleanup, and explicit root removals modify their observable collections on that captured context. Changes made from another context use synchronous dispatch, so collection mutations finish before the calling API continues. Keep the context responsive and await worker tasks instead of blocking the UI thread.
+
+For UI binding, call `Operate` on the UI synchronization context, such as the WPF dispatcher. Operator creation does not capture a context. Progress reports and child registration may run on worker threads, including after `ConfigureAwait(false)`. Property-change notifications are raised on the thread updating state and are not dispatched by the library. State updates across an operation tree must still be serialized; collection dispatch does not make progress reporting thread-safe. Enumerate live collections on their owning UI context and avoid concurrent mutations during enumeration or `RemoveComplete` selection.
+
+If `Operate` is called without a synchronization context, observable collection changes run directly on the calling thread.
 
 After the first progress or target update, an operation becomes relevant if it is still running about one second later. Errors become relevant immediately. Report a change when work begins so long-running tasks become visible.
 

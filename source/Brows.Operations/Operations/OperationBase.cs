@@ -42,6 +42,7 @@ internal class OperationBase : Notifier, IOperation {
     private bool CancellationRequested;
     private Stopwatch Stopwatch;
     private CancellationTokenSource TokenSource;
+    private readonly SynchronizationContext SynchronizationContext;
     private readonly ProgressChangeContext ProgressChange;
     private readonly OperationBaseCollection ChildCollection = [];
 
@@ -267,9 +268,18 @@ internal class OperationBase : Notifier, IOperation {
 
     private static async void ObserveCompletion(Task completion) {
         /*
-         * Surface unexpected root failures through the UI synchronization context.
+         * Surface unexpected root failures through the observer's captured synchronization context.
          */
         await completion;
+    }
+
+    internal void SynchronizeCollectionChange(Action change) {
+        if (SynchronizationContext is null || SynchronizationContext.Current == SynchronizationContext) {
+            change();
+        }
+        else {
+            SynchronizationContext.Send(_ => change(), null);
+        }
     }
 
     internal void Start() {
@@ -390,10 +400,19 @@ internal class OperationBase : Notifier, IOperation {
     public OperationBase Parent { get; }
     public OperationDelegate Task { get; }
 
-    public OperationBase(string name, OperationBase parent, OperationDelegate task) {
+    public OperationBase(string name,
+                         OperationBase parent,
+                         OperationDelegate task,
+                         SynchronizationContext synchronizationContext = null) {
         Task = task ?? throw new ArgumentNullException(nameof(task));
         Name = name;
         Parent = parent;
+        SynchronizationContext =
+            parent is null ? synchronizationContext :
+            parent.SynchronizationContext == synchronizationContext ? synchronizationContext :
+            throw new ArgumentException(
+                paramName: nameof(synchronizationContext),
+                message: $"Synchronization context mismatch!");
         ProgressChange = Parent?.ProgressChange ?? new ProgressChangeContext();
         Depth = Parent == null ? 0 : (Parent.Depth + 1);
     }

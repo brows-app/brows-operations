@@ -54,6 +54,56 @@ public sealed class OperatorControlTests {
     private static ICommand Command(Operation operation, string name) =>
         (ICommand)Converter().Convert(operation, typeof(ICommand), name, System.Globalization.CultureInfo.InvariantCulture);
 
+    /// <summary>Verifies bound child additions and root removals use the WPF dispatcher from worker tasks.</summary>
+    /// <param name="fails">Whether to retain a child failure and remove its root explicitly.</param>
+    /// <returns>A task representing execution of the test.</returns>
+    [TestCase(false)]
+    [TestCase(true)]
+    public Task WorkerCollections_UpdateDispatcherBindings(bool fails) => WpfTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var release = Signal();
+        var mutationsOnDispatcher = new List<bool>();
+        ((INotifyCollectionChanged)@operator.Operations.Source).CollectionChanged += (_, _) =>
+            mutationsOnDispatcher.Add(dispatcher.CheckAccess());
+        var root = Start(@operator, async (progress, _) => {
+            await release.Task.ConfigureAwait(false);
+            await progress.Child("worker child", (childProgress, _) => {
+                childProgress.Change(setTarget: 1, setProgress: 1, data: "worker details");
+                return fails ? Task.FromException(new IOException("worker failure")) : Task.CompletedTask;
+            }).ConfigureAwait(false);
+        });
+        ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) =>
+            mutationsOnDispatcher.Add(dispatcher.CheckAccess());
+        var rootItems = new ItemsControl { ItemsSource = @operator.Operations.Source };
+        var childItems = new ItemsControl { ItemsSource = (IEnumerable)root.ChildSource };
+        Assert.That(rootItems.Items.Count, Is.EqualTo(1));
+        Assert.That(childItems.Items.Count, Is.Zero);
+        var control = new OperatorControl { Operator = @operator };
+        await Layout(control);
+        release.SetResult();
+        await root.Completion.WaitAsync(Timeout);
+        await Layout(control);
+        if (fails) {
+            var child = ((IEnumerable)root.ChildSource).Cast<OperationBase>().Single();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(child.Error.Message, Is.EqualTo("worker failure"));
+                Assert.That(Descendants<ItemsControl>(control).Any(items => items.Items.Contains(child)), Is.True);
+                Assert.That(Descendants<TextBlock>(control).Any(text => text.Text == "worker failure"), Is.True);
+            }
+            var removed = await Task.Run(() => @operator.Operations.Remove(root)).WaitAsync(Timeout);
+            Assert.That(removed, Is.True);
+            await Layout(control);
+        }
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(mutationsOnDispatcher, Is.EqualTo(new[] { true, true, true }));
+            Assert.That(root.CompleteWithError, Is.EqualTo(fails));
+            Assert.That(@operator.Operations.Count, Is.Zero);
+            Assert.That(rootItems.Items.Count, Is.Zero);
+            Assert.That(childItems.Items.Count, Is.EqualTo(1));
+        }
+    });
+
     /// <summary>Verifies that the command converter returns an unset value for a missing or unsupported operation.</summary>
     /// <param name="value">The missing or unsupported operation value to convert.</param>
     /// <returns>A task representing execution of the test.</returns>

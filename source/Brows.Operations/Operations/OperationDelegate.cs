@@ -7,8 +7,10 @@ namespace Brows.Operations;
 /// <param name="token">The operation's cancellation token, linked to its parent's token for child operations.</param>
 /// <returns>A task representing the delegate's work.</returns>
 /// <remarks>
-/// Report progress and register children on the UI synchronization context on which the operation
-/// started. Honor cancellation cooperatively. The operation records delegate failures and waits
+/// Progress reporting and child registration may continue on worker threads, including after
+/// ConfigureAwait(false). Observable collection changes use the context captured by the root's
+/// Operate call; property-change notifications are not dispatched. Serialize operation state updates
+/// across the tree and honor cancellation cooperatively. The operation records delegate failures and waits
 /// for registered descendants even when this delegate fails or is canceled.
 /// </remarks>
 public delegate Task OperationDelegate(IOperationProgress progress, CancellationToken token);

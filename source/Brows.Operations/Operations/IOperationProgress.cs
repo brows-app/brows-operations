@@ -6,8 +6,10 @@ namespace Brows.Operations;
 
 /// <summary>Reports operation state and starts child operations.</summary>
 /// <remarks>
-/// Use this interface on the operation's UI synchronization context. Register children before
-/// the operation's delegate returns; the operation waits for all registered descendants.
+/// Progress reports and child registration may run outside the synchronization context captured
+/// by Operate. Only observable collection changes are dispatched to that context; property-change
+/// notifications run on the thread updating state. Serialize state updates across the operation tree.
+/// Register children before the operation's delegate returns; the operation waits for all registered descendants.
 /// </remarks>
 public interface IOperationProgress {
     /// <summary>Updates numeric progress, display strings, and operation metadata.</summary>
@@ -44,7 +46,8 @@ public interface IOperationProgress {
     /// <exception cref="InvalidOperationException">The parent delegate has already returned.</exception>
     /// <exception cref="OperationCanceledException">Cancellation has already been requested for the parent.</exception>
     /// <remarks>
-    /// The child's delegate starts immediately. Its ordinary failures are recorded on the child
+    /// The child's delegate starts immediately after its collection addition has completed on the
+    /// context captured by the root's Operate call. Its ordinary failures are recorded on the child
     /// and contribute to the parent's error state, but do not fault the returned task.
     /// Successful awaiting indicates completion, rather than successful work. Registration failures
     /// and unexpected completion-task failures propagate through the returned task.

@@ -17,6 +17,24 @@ internal static class UiTestThread {
             Queue.Add((callback, state));
         }
 
+        public override void Send(SendOrPostCallback callback, object state) {
+            if (SynchronizationContext.Current == this) {
+                callback(state);
+                return;
+            }
+            var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(_ => {
+                try {
+                    callback(state);
+                    completed.SetResult(true);
+                }
+                catch (Exception exception) {
+                    completed.SetException(exception);
+                }
+            }, null);
+            completed.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+        }
+
         public override void OperationStarted() {
             Interlocked.Increment(ref AsyncVoidCount);
         }

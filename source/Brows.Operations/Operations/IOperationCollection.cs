@@ -4,7 +4,11 @@ using System.Collections.Generic;
 namespace Brows.Operations;
 
 /// <summary>Provides access to the root operations tracked by an operator.</summary>
-/// <remarks>Access the collection on the operator's UI synchronization context.</remarks>
+/// <remarks>
+/// Root additions and removals use the synchronization context captured by each root's Operate call.
+/// Without a captured context, mutations run on the calling thread. Property-change notifications
+/// are not dispatched. Enumerate live views on the owning UI context and avoid concurrent mutations.
+/// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>
     int Count { get; }
@@ -30,6 +34,7 @@ public interface IOperationCollection {
     /// <see langword="true"/> if the operation was removed; <see langword="false"/> if it is null,
     /// still running, or not in this collection.
     /// </returns>
+    /// <remarks>Removal synchronously dispatches the collection mutation to the operation's captured context.</remarks>
     bool Remove(IOperation item);
 
     /// <summary>
@@ -41,5 +46,10 @@ public interface IOperationCollection {
     /// or <see langword="null"/> to remove all completed operations.
     /// </param>
     /// <returns>The number of operations removed.</returns>
+    /// <remarks>
+    /// Each removal synchronously dispatches the collection mutation to the operation's captured context.
+    /// The selection of completed operations enumerates the live collection on the calling thread;
+    /// avoid concurrent additions or removals during selection.
+    /// </remarks>
     int RemoveComplete(bool? withError = null);
 }

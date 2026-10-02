@@ -1,4 +1,6 @@
-﻿namespace Brows.Operations;
+﻿using System.Threading;
+
+namespace Brows.Operations;
 
 internal sealed class Operator : IOperator {
     private readonly OperationCollection OperationCollection = new();
@@ -8,7 +10,7 @@ internal sealed class Operator : IOperator {
 
     public void Operate(string name, OperationDelegate task) {
         var
-        manager = new OperationManager(OperationCollection);
+        manager = new OperationManager(OperationCollection, SynchronizationContext.Current);
         manager.Operate(name, task);
     }
 }

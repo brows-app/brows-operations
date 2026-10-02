@@ -43,7 +43,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             Relevance++;
         }
         item.RelevantChanged += Item_RelevantChanged;
-        Collection.Add(item);
+        item.SynchronizeCollectionChange(() => Collection.Add(item));
         NotifyPropertyChanged(CountEvent);
     }
 
@@ -54,7 +54,8 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         if (item.Complete != true) {
             return false;
         }
-        var removed = Collection.Remove(item);
+        var removed = false;
+        item.SynchronizeCollectionChange(() => removed = Collection.Remove(item));
         if (removed) {
             if (item.Relevant) {
                 Relevance--;

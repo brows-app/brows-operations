@@ -2,8 +2,9 @@
 
 /// <summary>Starts and tracks asynchronous work as a hierarchy of operations.</summary>
 /// <remarks>
-/// Start operations on a Windows UI synchronization context and keep progress reports and
-/// continuations on that context. The implementation expects sequential access.
+/// Each Operate call captures the current synchronization context for observable collection
+/// changes in that operation and its descendants. Progress reports and property-change
+/// notifications may run on other threads; callers must still serialize operation state updates.
 /// </remarks>
 public interface IOperator {
     /// <summary>Gets the collection of tracked root operations.</summary>
@@ -16,7 +17,11 @@ public interface IOperator {
     /// <exception cref="ArgumentNullException"><paramref name="task"/> is null.</exception>
     /// <remarks>
     /// The delegate starts immediately and may finish synchronously. This method does not await
-    /// completion. Delegate errors are recorded on the operation, whose lifetime includes all
+    /// completion. The current synchronization context is captured for root and child collection
+    /// additions and root removals. Changes from another context use synchronous dispatch;
+    /// without a context, collection changes run on the calling thread. Property-change notifications
+    /// are not dispatched. When binding to a UI, call this method on that UI's context.
+    /// Delegate errors are recorded on the operation, whose lifetime includes all
     /// registered descendants. Requested cancellation is treated as completion without an error
     /// unless the delegate or a descendant records another failure.
     /// </remarks>

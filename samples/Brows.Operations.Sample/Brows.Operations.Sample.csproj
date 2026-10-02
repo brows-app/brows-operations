@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworks>net10.0-windows</TargetFrameworks>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="OperationsSampleApp.xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\source\Brows.Operations.Composition\Brows.Operations.Composition.csproj" />
+    <ProjectReference Include="..\..\source\Brows.Operations.Windows\Brows.Operations.Windows.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,8 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Domore.Logs" />
+    <PackageReference Include="Domore.Notification" />
+  </ItemGroup>
+</Project>

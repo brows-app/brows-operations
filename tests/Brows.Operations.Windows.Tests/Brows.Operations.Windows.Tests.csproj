@@ -1,0 +1,10 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0-windows;net10.0-windows</TargetFrameworks>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\source\Brows.Operations.Windows\Brows.Operations.Windows.csproj" />
+    <ProjectReference Include="..\..\source\Brows.Operations\Brows.Operations.csproj" />
+  </ItemGroup>
+</Project>

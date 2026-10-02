@@ -1,0 +1,83 @@
+name: Workflow
+
+on:
+  push:
+    branches: [ dev ]
+  release:
+    types: [ published ]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DOTNET_VERSION: '10.x'
+  CUSTOM_PACK_OUTPUT: ${{ github.workspace }}/pack-output
+
+jobs:
+  workflow:
+    name: Build, test, pack, and push
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Version
+      if: github.event_name == 'release'
+      env:
+        RELEASE_NAME: ${{ github.event.release.name }}
+      run: |
+           $name = $env:RELEASE_NAME
+           if ([string]::IsNullOrWhiteSpace($name)) {
+             throw "The release name is empty."
+           }
+           $prefix, $suffix = $name.Trim() -split '-', 2
+           if ([string]::IsNullOrWhiteSpace($prefix)) {
+             throw "The release name '$name' has no version prefix."
+           }
+           if ($null -eq $suffix) {
+             $suffix = ''
+           }
+           $file = Resolve-Path 'Directory.Build.props'
+           $props = New-Object System.Xml.XmlDocument
+           $props.PreserveWhitespace = $true
+           $props.Load($file)
+           $prefixNode = $props.SelectSingleNode('/Project/PropertyGroup/VersionPrefix')
+           $suffixNode = $props.SelectSingleNode('/Project/PropertyGroup/VersionSuffix')
+           if ($null -eq $prefixNode -or $null -eq $suffixNode) {
+             throw "'$file' has no VersionPrefix or VersionSuffix element."
+           }
+           $prefixNode.InnerText = $prefix
+           $suffixNode.InnerText = $suffix
+           $props.Save($file)
+           Write-Host "VersionPrefix=$prefix VersionSuffix=$suffix"
+
+    - name: Restore
+      run: dotnet restore
+      
+    - name: Build
+      run: dotnet build --no-restore --configuration Release -p:ContinuousIntegrationBuild=true
+    
+    - name: Test
+      run: dotnet test --no-restore --configuration Release --no-build --verbosity normal
+
+    - name: NuGet login
+      if: github.event_name == 'release'
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
+    - name: Pack
+      if: github.event_name == 'release'
+      run: dotnet pack --no-restore --configuration Release --no-build --output ${{ env.CUSTOM_PACK_OUTPUT }} -p:ContinuousIntegrationBuild=true
+
+    - name: Push
+      if: github.event_name == 'release'
+      run: |
+           foreach($file in (Get-ChildItem "${{ env.CUSTOM_PACK_OUTPUT }}" -Recurse -Include *.nupkg)) {
+             dotnet nuget push $file --api-key "${{steps.login.outputs.NUGET_API_KEY}}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+           }

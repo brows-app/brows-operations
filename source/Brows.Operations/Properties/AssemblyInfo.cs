@@ -1,0 +1,5 @@
+﻿[assembly: ComVisible(false)]
+[assembly: InternalsVisibleTo("Brows.Operations.Composition")]
+[assembly: InternalsVisibleTo("Brows.Operations.Tests")]
+[assembly: InternalsVisibleTo("Brows.Operations.Windows")]
+[assembly: InternalsVisibleTo("Brows.Operations.Windows.Tests")]

@@ -11,7 +11,7 @@
     <RepositoryBranch></RepositoryBranch>
     <RepositoryCommit></RepositoryCommit>
     <RootNamespace>Brows</RootNamespace>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <TargetFrameworks>net462;net48;net8.0;net10.0</TargetFrameworks>
     <Deterministic>true</Deterministic>
     <LangVersion>14.0</LangVersion>
     <ArtifactsPath>../../out</ArtifactsPath>

@@ -1,4 +1,5 @@
-﻿using Domore.Logs;
+﻿using Brows.Shims;
+using Domore.Logs;
 using Domore.Notification;
 using System;
 using System.Collections.Generic;
@@ -264,8 +265,10 @@ internal class OperationBase : Notifier, IOperation {
         }
     }
 
-    private async void ObserveCompletion(Task completion) {
-        // Surface unexpected root failures through the UI synchronization context.
+    private static async void ObserveCompletion(Task completion) {
+        /*
+         * Surface unexpected root failures through the UI synchronization context.
+         */
         await completion;
     }
 
@@ -287,27 +290,26 @@ internal class OperationBase : Notifier, IOperation {
         if (Log.Info()) {
             Log.Info($"Cancel: {Name}");
         }
-        CancellationRequested = true;
-        var children = ChildCollection.ToArray();
-        var exceptions = new List<Exception>();
-        Canceling = true;
-        foreach (var child in children) {
-            try {
-                child.Cancel();
-            }
-            catch (AggregateException ex) {
-                exceptions.Add(ex);
-            }
-        }
+        /*
+         * Mark the tree before cancellation callbacks can complete it synchronously.
+         */
+        cancel(this);
         try {
             TokenSource?.Cancel();
         }
         catch (AggregateException ex) {
-            exceptions.Add(ex);
-        }
-        if (exceptions.Count > 0) {
-            throw new AggregateException($"Cancellation of '{Name}' encountered callback failures.", exceptions)
+            throw new AggregateException($"Cancellation of '{Name}' encountered callback failures.", ex)
                 .Flatten();
+        }
+        static void cancel(OperationBase op) {
+            if (op.CancellationRequested) {
+                return;
+            }
+            op.CancellationRequested = true;
+            op.Canceling = true;
+            foreach (var child in op.ChildCollection.ToArray()) {
+                cancel(child);
+            }
         }
     }
 
@@ -372,7 +374,7 @@ internal class OperationBase : Notifier, IOperation {
     public int Depth { get; }
 
     public string DepthString => field ??=
-        string.Create(Depth, default(object), (span, _) => span.Fill('>'));
+        new string('>', Depth);
 
     public bool CompleteWithError {
         get;

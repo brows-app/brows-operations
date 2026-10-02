@@ -903,7 +903,7 @@ public sealed class OperatorTests {
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var whileRunning = (operation.CanCancel, operation.CanRemove);
             operation.Cancel();
-            var whileCanceling = (operation.CanCancel, operation.CanRemove);
+            var whileCanceling = (operation.CanCancel, operation.CanRemove, operation.Complete);
             await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
             var afterCompletion = (operation.CanCancel, operation.CanRemove);
 
@@ -911,7 +911,7 @@ public sealed class OperatorTests {
                 Assert.That(whileRunning.CanCancel, Is.True);
                 Assert.That(whileRunning.CanRemove, Is.False);
                 Assert.That(whileCanceling.CanCancel, Is.False);
-                Assert.That(whileCanceling.CanRemove, Is.False);
+                Assert.That(whileCanceling.CanRemove, Is.EqualTo(whileCanceling.Complete));
                 Assert.That(afterCompletion.CanCancel, Is.False);
                 Assert.That(afterCompletion.CanRemove, Is.True);
             }

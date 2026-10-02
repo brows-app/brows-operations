@@ -12,6 +12,8 @@ namespace Brows.Windows.Controls;
 /// Access the control and start operations on the WPF dispatcher so Operate captures its
 /// synchronization context for root and child collection changes. Progress reports may run on
 /// worker threads; property-change notifications are not dispatched by the operations library.
+/// Built-in Cancel and Remove commands deliver CanExecuteChanged on their creating dispatcher;
+/// changes raised on workers are queued asynchronously to that dispatcher.
 /// </remarks>
 sealed partial class OperatorControl {
     static OperatorControl() {

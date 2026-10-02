@@ -4,6 +4,7 @@ using System;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace Brows.Windows.Data;
 
@@ -26,12 +27,19 @@ internal sealed class OperationCommandConverter : IValueConverter {
     }
 
     private abstract class OperationCommand : ICommand {
+        private readonly Dispatcher CommandDispatcher = Dispatcher.CurrentDispatcher;
+
         protected abstract bool CanExecute { get; }
 
         protected abstract void Execute();
 
         protected virtual void OnCanExecuteChanged(EventArgs e) {
-            CanExecuteChanged?.Invoke(this, e);
+            if (CommandDispatcher.CheckAccess()) {
+                CanExecuteChanged?.Invoke(this, e);
+            }
+            else {
+                CommandDispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() => OnCanExecuteChanged(e)));
+            }
         }
 
         public event EventHandler CanExecuteChanged;

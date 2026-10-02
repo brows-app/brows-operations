@@ -43,4 +43,6 @@ Set `OperationErrorTemplate` to customize how an operation's exception is displa
 
 Leaving `OperationErrorTemplate` unset or setting it to null uses the default message display.
 
+The built-in Cancel and Remove commands capture their creating WPF dispatcher. `CanExecuteChanged` notifications run immediately when raised on that dispatcher; notifications raised on workers are queued asynchronously to it so bound buttons update safely. Core operation property-change notifications remain on the thread updating state.
+
 The project targets `net8.0-windows` and `net10.0-windows` and requires WPF. Access the control and call `Operate` on the WPF dispatcher thread. Each call captures the dispatcher synchronization context for root and child observable collection changes, including removals requested from workers. Mutations dispatch synchronously, so keep the dispatcher responsive and await worker tasks. Operator creation does not capture a context. Progress reports and child registration may run on worker threads; property-change notifications are not dispatched by the library. Serialize state updates across the operation tree. See the [repository](https://github.com/brows-app/brows-operations) for the sample project and usage guidance.

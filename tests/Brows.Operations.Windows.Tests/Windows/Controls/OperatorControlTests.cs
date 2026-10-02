@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -272,6 +273,66 @@ public sealed class OperatorControlTests {
             Assert.That(before, Is.True);
             Assert.That(afterCancel, Is.False);
             Assert.That(changed > 0, Is.True);
+        }
+    });
+
+    /// <summary>Verifies worker state changes update bound buttons on the command's creating dispatcher.</summary>
+    /// <param name="name">The command whose eligibility changes on a worker.</param>
+    /// <returns>A task representing execution of the test.</returns>
+    [TestCase("Cancel")]
+    [TestCase("Remove")]
+    public Task WorkerCommandChanges_UpdateButtonsOnCreatingDispatcher(string name) => WpfTestThread.Run(async () => {
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var context = SynchronizationContext.Current;
+        var release = Signal();
+        var delivered = Signal();
+        var cancel = name == "Cancel";
+        var root = cancel
+            ? Start(new Operator(), async (_, _) => await release.Task)
+            : new Operation("worker completion", (_, _) => Task.CompletedTask);
+        var command = Command(root, name);
+        var button = new Button();
+        BindingOperations.SetBinding(button, Button.CommandProperty, new Binding { Source = command });
+        var notificationsOnDispatcher = new List<bool>();
+        var propertyChangesOnDispatcher = new List<bool>();
+        command.CanExecuteChanged += (_, _) => {
+            notificationsOnDispatcher.Add(dispatcher.CheckAccess());
+            delivered.TrySetResult();
+        };
+        root.PropertyChanged += (_, e) => {
+            if (e.PropertyName == (cancel ? nameof(Operation.Canceling) : nameof(Operation.Complete))) {
+                propertyChangesOnDispatcher.Add(dispatcher.CheckAccess());
+            }
+        };
+        try {
+            Assert.That(button.IsEnabled, Is.EqualTo(cancel));
+            await Task.Run(() => {
+                if (cancel) {
+                    root.Cancel();
+                }
+                else {
+                    // Synchronous completion stays on this worker. Route any unexpected
+                    // async-void observer failure to the test dispatcher instead of the process.
+                    var previous = SynchronizationContext.Current;
+                    SynchronizationContext.SetSynchronizationContext(context);
+                    try { root.Start(); }
+                    finally { SynchronizationContext.SetSynchronizationContext(previous); }
+                }
+            }).WaitAsync(Timeout);
+            if (!cancel) {
+                await root.Completion.WaitAsync(Timeout);
+            }
+            await delivered.Task.WaitAsync(Timeout);
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(notificationsOnDispatcher, Is.EqualTo(new[] { true }));
+                Assert.That(propertyChangesOnDispatcher, Is.EqualTo(new[] { false }));
+                Assert.That(command.CanExecute(null), Is.EqualTo(!cancel));
+                Assert.That(button.IsEnabled, Is.EqualTo(!cancel));
+            }
+        }
+        finally {
+            release.TrySetResult();
+            await root.Completion.WaitAsync(Timeout);
         }
     });
 

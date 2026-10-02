@@ -54,6 +54,8 @@ For UI binding, call `Operate` on the UI synchronization context, such as the WP
 
 If `Operate` is called without a synchronization context, observable collection changes run directly on the calling thread.
 
+The WPF control's Cancel and Remove commands deliver `CanExecuteChanged` on their creating dispatcher. Worker notifications are queued asynchronously; notifications already on the dispatcher are delivered immediately.
+
 After the first progress or target update, an operation becomes relevant if it is still running about one second later. Errors become relevant immediately. Report a change when work begins so long-running tasks become visible.
 
 ## Build and run

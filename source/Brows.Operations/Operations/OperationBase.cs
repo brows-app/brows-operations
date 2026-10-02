@@ -66,7 +66,7 @@ internal class OperationBase : Notifier, IOperation {
         if (Log.Info()) {
             Log.Info(nameof(Child) + " > " + name);
         }
-        var child = new OperationBase(name, this, task);
+        var child = new OperationBase(name, this, task, SynchronizationContext);
         ChildCollection.Add(child);
         child.Start();
         return child;
@@ -409,7 +409,8 @@ internal class OperationBase : Notifier, IOperation {
         Parent = parent;
         SynchronizationContext =
             parent is null ? synchronizationContext :
-            parent.SynchronizationContext == synchronizationContext ? synchronizationContext :
+            parent.SynchronizationContext == synchronizationContext || synchronizationContext is null
+                ? parent.SynchronizationContext :
             throw new ArgumentException(
                 paramName: nameof(synchronizationContext),
                 message: $"Synchronization context mismatch!");

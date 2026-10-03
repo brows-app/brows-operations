@@ -57,7 +57,9 @@ context was captured, collection changes run on the thread making each update.
 You can call `Operate`, report progress, and register children from worker threads. The operation tree
 synchronizes its state updates. Property-change notifications run on the thread making each update;
 WPF bindings marshal bound property updates to their dispatcher. Direct event subscribers run on the
-updating thread. The operator does not change delegate execution or normal `await` context capture.
+updating thread after state locks have been released. Updates commit their state before notifications;
+reentrant reports append their notifications to the current thread's notification batch. The operator
+does not change delegate execution or normal `await` context capture.
 Use `IOperationCollection.Snapshot()` to enumerate roots while other threads add or remove them. For
 UI-bound child collections, enumerate their observable source on the captured dispatcher.
 

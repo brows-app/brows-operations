@@ -20,7 +20,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
     private readonly OperationSynchronization OperationSync;
     private int Relevance;
 
-    private void Item_RelevantChanged(object sender, EventArgs e) {
+    private void Item_RelevantCommitted(object sender, EventArgs e) {
         if (sender is Operation item) {
             OperationSync.Update(() => {
                 Relevance += item.Relevant ? 1 : -1;
@@ -31,6 +31,10 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
 
     private Operation[] SnapshotCore() =>
         OperationSync.Read(() => Core.ToArray());
+
+    protected override void OnPropertyChanged(PropertyChangedEventArgs e) {
+        OperationSync.Notify(() => base.OnPropertyChanged(e));
+    }
 
     public bool Relevant =>
         OperationSync.Read(() => Relevance > 0);
@@ -59,7 +63,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
                 Relevance++;
                 relevanceChanged = true;
             }
-            item.RelevantChanged += Item_RelevantChanged;
+            item.RelevantCommitted += Item_RelevantCommitted;
         }, () => Observable.Add(item), () => {
             if (relevanceChanged) {
                 NotifyPropertyChanged(RelevanceEvent, RelevanceDependents);
@@ -84,7 +88,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
                     Relevance--;
                     relevanceChanged = true;
                 }
-                item.RelevantChanged -= Item_RelevantChanged;
+                item.RelevantCommitted -= Item_RelevantCommitted;
             }
         }, () => {
             if (removed) {

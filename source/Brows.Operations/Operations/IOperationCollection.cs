@@ -9,6 +9,8 @@ namespace Brows.Operations;
 /// observable changes run on the thread making each change. Property-change notifications run on
 /// the thread updating state. <see cref="Snapshot"/> can be enumerated while roots are added or
 /// removed.
+/// State notifications are delivered after state locks have been released. Reentrant updates append
+/// their notifications to the current thread's notification batch.
 /// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>

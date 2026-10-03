@@ -658,38 +658,75 @@ public sealed class RegressionTests {
     });
 
     /// <summary>Verifies that a rejected early removal request preserves later command removal.</summary>
-    /// <param name="duringFinalization">Whether to make the early removal request from a finalization notification.</param>
+    /// <param name="duringErrorNotification">
+    /// Whether to request removal from the delegate-error notification.
+    /// </param>
     /// <returns>A task representing execution of the test.</returns>
     [TestCase(false)]
     [TestCase(true)]
-    public Task Remove_RejectedRequestKeepsTheHandlerForRemovalAfterCompletion(bool duringFinalization) => UiTestThread.Run(async () => {
+    public Task Remove_RejectedRequestKeepsTheHandlerForRemovalAfterCompletion(bool duringErrorNotification) =>
+        UiTestThread.Run(async () => {
+            IOperator @operator = new Operator();
+            var release = Signal();
+            var root = Start(@operator, async (_, _) => { await release.Task; throw new IOException("failure"); });
+            var eligibleBefore = true;
+            var countAfterRejectedRequest = -1;
+            void RequestEarlyRemoval() {
+                eligibleBefore = root.CanRemove;
+                root.Remove();
+                countAfterRejectedRequest = @operator.Operations.Count;
+            }
+            if (duringErrorNotification) {
+                root.PropertyChanged += (_, e) => {
+                    if (e.PropertyName == nameof(OperationBase.Error)) RequestEarlyRemoval();
+                };
+            }
+            else {
+                RequestEarlyRemoval();
+            }
+            release.SetResult();
+            await root.Completion.WaitAsync(Timeout);
+            var eligibleAfter = root.CanRemove;
+            root.Remove();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(eligibleBefore, Is.False);
+                Assert.That(countAfterRejectedRequest, Is.EqualTo(1));
+                Assert.That(eligibleAfter, Is.True);
+                Assert.That(@operator.Operations.Count, Is.EqualTo(0));
+            }
+        });
+
+    /// <summary>
+    /// Verifies finalization notifications expose committed completion and relevance before reentrant removal.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [Test]
+    public Task FinalizationNotification_ObservesCommittedStateAndAllowsRemoval() => UiTestThread.Run(async () => {
         IOperator @operator = new Operator();
         var release = Signal();
         var root = Start(@operator, async (_, _) => { await release.Task; throw new IOException("failure"); });
-        var eligibleBefore = true;
-        var countAfterRejectedRequest = -1;
-        void RequestEarlyRemoval() {
-            eligibleBefore = root.CanRemove;
-            root.Remove();
-            countAfterRejectedRequest = @operator.Operations.Count;
-        }
-        if (duringFinalization) {
-            root.PropertyChanged += (_, e) => {
-                if (e.PropertyName == nameof(OperationBase.Progressing) && !root.Progressing) RequestEarlyRemoval();
-            };
-        }
-        else {
-            RequestEarlyRemoval();
-        }
+        (bool Complete, bool CanRemove, bool WithError, bool CollectionRelevant) state = default;
+        var countAfterRemoval = -1;
+        root.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(OperationBase.Progressing) && !root.Progressing) {
+                state = (root.Complete, root.CanRemove, root.CompleteWithError,
+                    ((OperationCollection)@operator.Operations).Relevant);
+                root.Remove();
+                countAfterRemoval = @operator.Operations.Count;
+            }
+        };
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
-        var eligibleAfter = root.CanRemove;
-        root.Remove();
+
         using (Assert.EnterMultipleScope()) {
-            Assert.That(eligibleBefore, Is.False);
-            Assert.That(countAfterRejectedRequest, Is.EqualTo(1));
-            Assert.That(eligibleAfter, Is.True);
-            Assert.That(@operator.Operations.Count, Is.EqualTo(0));
+            Assert.That(state.Complete, Is.True);
+            Assert.That(state.CanRemove, Is.True);
+            Assert.That(state.WithError, Is.True);
+            Assert.That(state.CollectionRelevant, Is.True);
+            Assert.That(countAfterRemoval, Is.Zero);
+            Assert.That(((OperationCollection)@operator.Operations).Relevant, Is.False);
         }
     });
 

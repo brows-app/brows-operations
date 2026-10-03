@@ -172,3 +172,62 @@ Tests use NUnit fluent constraints. Tests that check several values use individu
 - WPF restore/build/test/pack required access to local Windows SDK metadata denied by the default sandbox. Rerunning with that access succeeded; the initial environment restriction is not a repository defect.
 
 Completion-listener propagation and delegate-error publication coverage is in [NotificationFailureTests.cs](tests/Brows.Operations.Tests/Operations/NotificationFailureTests.cs), [RegressionTests.cs](tests/Brows.Operations.Tests/Operations/RegressionTests.cs), and [OperatorControlTests.cs](tests/Brows.Operations.Windows.Tests/Operations/OperatorControlTests.cs).
+
+## WPF threading follow-up, October 3, 2026
+
+### 19. Resolved — State notifications invoke subscribers while holding the state lock
+
+**Fix:** `agent/19/notifications-outside-lock` batches notifications on the updating thread and publishes
+them after the outermost state update releases its locks. Nested and reentrant reports retain FIFO
+notification delivery. Collection relevance commits in the state transaction; collection projection
+drains remain scheduled even when a listener throws. The original defect is recorded below.
+
+**Locations on the reviewed branch:**
+`source/Brows.Operations/Operations/OperationSynchronization.cs:52–63`;
+`source/Brows.Operations/Operations/OperationBase.cs:460–467`, `:511–513`, and `:557–570`.
+Numeric notifications at `OperationBase.cs:178–191` and `:250–263`, and collection property
+notifications in `OperationCollection.cs:63–68` and `:93–100`, have the same locking pattern.
+
+`ProgressWrapper.Change` holds the shared state gate while calling setters that synchronously invoke
+`PropertyChanged` subscribers. Scalar getters, including the public `IOperation.Complete`, acquire
+that same gate. A direct subscriber that synchronously marshals to the WPF dispatcher and reads
+operation state therefore causes a lock cycle:
+
+1. The worker holds the state gate and raises `PropertyChanged`.
+2. The subscriber calls `Dispatcher.Invoke` and waits for its UI callback.
+3. The UI callback reads `IOperation.Complete` and waits for the worker's state gate.
+4. The worker cannot release the gate until the subscriber returns.
+
+The dispatcher and reporting worker remain blocked. The gate is shared across the operator, so other
+operation getters and updates can also stall. This does not require an exception, concurrent
+enumeration, or a UI thread blocking on an operation task. It affects direct event subscribers that
+marshal synchronously; ordinary WPF scalar bindings already marshal asynchronously and do not
+require that subscriber pattern.
+
+**Reproduction:** A focused harness used a real STA WPF dispatcher, a worker calling
+`progress.Change(name: "changed")`, and a `PropertyChanged` subscriber posting a dispatcher callback
+that reads `((IOperation)root).Complete`. The handler waited for that callback with a bounded timeout.
+The callback entered the dispatcher but could not finish its getter until the handler timed out and
+released the worker's gate. An unbounded synchronous dispatcher invocation would deadlock.
+
+**Resolution:** Commit state changes and collect the required notifications while holding the gate,
+then invoke external subscribers after releasing it. Account for nested setters and reentrant updates
+so an inner method does not publish while an outer update still holds the gate. Preserve numeric
+hierarchy consistency, notification ordering, reentrant reports, and exception propagation. Apply the
+same rule to state/capability events and collection property notifications. Add a bounded real-WPF
+regression showing that a worker notification handler can synchronously dispatch a public state read
+and finish without a lock cycle.
+
+## Fix validation for issue 19
+
+- The new WPF Name-notification regression failed against the original code because the dispatcher
+  getter waited for the worker's state lock, then passed after the fix.
+- All 21 WPF notification cases passed on every target framework, covering metadata, numeric values,
+  cancellation, completion, relevance, capability events, and collection property notifications.
+- Full solution restore and Release build passed with zero warnings and zero errors.
+- Full solution tests passed: 101 core cases and 48 WPF cases per target framework, 596 executions total.
+- Core coverage includes nested gates, reentrant FIFO delivery, concurrent delivery on updater threads,
+  listener exception propagation, collection scheduling after exceptions, and committed finalization state.
+- Composition test assemblies contain no discoverable tests. No public API members were added.
+
+Issue 19 is resolved in `F:/dev/me/agent-brows-operations-19`. Issues 18 and 20 remain open.

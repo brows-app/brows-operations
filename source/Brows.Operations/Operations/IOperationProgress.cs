@@ -10,6 +10,8 @@ namespace Brows.Operations;
 /// synchronized across the tree. Observable collection changes are posted asynchronously to the
 /// context captured when the operator was created. Property-change notifications run on the thread
 /// updating state; WPF bindings marshal bound property updates to their dispatcher.
+/// State is committed before notifications, and subscribers run after state locks have been released.
+/// Reentrant reports append their notifications to the current thread's notification batch.
 /// Register children before the operation's delegate returns; the operation waits for all registered descendants.
 /// </remarks>
 public interface IOperationProgress {

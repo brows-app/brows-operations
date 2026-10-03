@@ -10,7 +10,9 @@ For WPF binding, create the operator on the dispatcher thread or pass its contex
 captured context; if no context was captured, changes run on the thread making each update. Progress
 reports and child registration may run on worker threads, including after `ConfigureAwait(false)`.
 Operation state updates are synchronized by the library. Property-change notifications run on the
-updating thread; WPF bindings marshal bound property updates to their dispatcher. Use
-`IOperationCollection.Snapshot()` to enumerate roots while other threads add or remove them. See the
+updating thread after state locks have been released. State is committed before notifications, and
+reentrant reports append notifications to the current thread's batch. WPF bindings marshal bound
+property updates to their dispatcher. Use `IOperationCollection.Snapshot()` to enumerate roots while
+other threads add or remove them. See the
 [repository README](https://github.com/brows-app/brows-operations#readme) for a usage example and build
 instructions.

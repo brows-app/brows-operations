@@ -161,13 +161,13 @@ internal class OperationBase : Notifier, IOperation {
 
     private void NotifyTargetChanged() {
         NotifyPropertyChanged(TargetEvent, TargetDependents);
-        TargetChanged?.Invoke(this, EventArgs.Empty);
+        Synchronization.Notify(() => TargetChanged?.Invoke(this, EventArgs.Empty));
         MakeRelevant();
     }
 
     private void NotifyProgressChanged() {
         NotifyPropertyChanged(ProgressEvent, ProgressDependents);
-        ProgressChanged?.Invoke(this, EventArgs.Empty);
+        Synchronization.Notify(() => ProgressChanged?.Invoke(this, EventArgs.Empty));
         MakeRelevant();
     }
 
@@ -381,6 +381,8 @@ internal class OperationBase : Notifier, IOperation {
         }
     }
 
+    internal event EventHandler RelevantCommitted;
+
     internal void Start() {
         Synchronization.Update(() => {
             if (Started) {
@@ -392,6 +394,14 @@ internal class OperationBase : Notifier, IOperation {
         if (Parent is null) {
             ObserveCompletion(CompletionSource.Task, Synchronization.SynchronizationContext);
         }
+    }
+
+    protected sealed override void OnPropertyChanged(PropertyChangedEventArgs e) {
+        Synchronization.Notify(() => PublishPropertyChanged(e));
+    }
+
+    protected virtual void PublishPropertyChanged(PropertyChangedEventArgs e) {
+        base.OnPropertyChanged(e);
     }
 
     protected void Cancel() {
@@ -475,7 +485,11 @@ internal class OperationBase : Notifier, IOperation {
                     if (value && Parent is not null) {
                         Parent.Relevant = true;
                     }
-                    RelevantChanged?.Invoke(this, EventArgs.Empty);
+                    /*
+                     * Commit collection relevance in this state transaction before publishing external notifications.
+                     */
+                    RelevantCommitted?.Invoke(this, EventArgs.Empty);
+                    Synchronization.Notify(() => RelevantChanged?.Invoke(this, EventArgs.Empty));
                 }
             });
         }

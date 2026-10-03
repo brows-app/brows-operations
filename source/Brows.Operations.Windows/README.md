@@ -52,6 +52,8 @@ context explicitly to `IOperatorFactory.Create(SynchronizationContext)`.
 You can call `Operate`, report progress, and register children from worker threads. The operation
 tree synchronizes state updates, while property-change notifications run on the updating thread;
 WPF bindings marshal bound property updates to the dispatcher. Direct event subscribers run on the
-updating thread. Creating the operator does not change delegate execution or normal `await` context
-capture. The project targets `net8.0-windows` and `net10.0-windows` and requires WPF. See the
+updating thread after state locks have been released and the update's state has been committed.
+Reentrant reports append notifications to the current thread's batch. Creating the operator does not
+change delegate execution or normal `await` context capture. The project targets `net8.0-windows` and
+`net10.0-windows` and requires WPF. See the
 [repository](https://github.com/brows-app/brows-operations) for the sample project and usage guidance.

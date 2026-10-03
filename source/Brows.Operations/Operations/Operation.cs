@@ -5,8 +5,8 @@ using System.Threading;
 namespace Brows.Operations;
 
 internal sealed class Operation : OperationBase {
-    protected sealed override void OnPropertyChanged(PropertyChangedEventArgs e) {
-        base.OnPropertyChanged(e);
+    protected sealed override void PublishPropertyChanged(PropertyChangedEventArgs e) {
+        base.PublishPropertyChanged(e);
         if (e?.PropertyName is nameof(Complete)) {
             CanRemoveChanged?.Invoke(this, EventArgs.Empty);
             NotifyPropertyChanged(nameof(CanRemove));

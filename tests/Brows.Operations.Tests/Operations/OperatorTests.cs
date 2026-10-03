@@ -228,15 +228,15 @@ public sealed class OperatorTests {
             var collection = new OperationCollection();
             IOperationCollection operations = collection;
             var release = NewSignal();
-            var failed = new Operation("failed", (_, _) => Task.FromException(new IOException("failure")));
-            var successful = new Operation("successful", (_, _) => Task.CompletedTask);
-            var running = new Operation("running", async (_, _) => await release.Task);
-            collection.Add(failed);
-            collection.Add(successful);
-            collection.Add(running);
-            failed.Start();
-            successful.Start();
-            running.Start();
+            var context = collection.Context;
+            var failed = new Operation("failed", (_, _) => Task.FromException(new IOException("failure")), context);
+            var successful = new Operation("successful", (_, _) => Task.CompletedTask, context);
+            var running = new Operation("running", async (_, _) => await release.Task, context);
+            foreach (var item in new[] { failed, successful, running }) {
+                collection.Add(item);
+                item.Prepare();
+                item.Start();
+            }
 
             try {
                 await Task.WhenAll(failed.Completion, successful.Completion).WaitAsync(TimeSpan.FromSeconds(5));
@@ -279,7 +279,7 @@ public sealed class OperatorTests {
     /// <returns>A task representing execution of the test.</returns>
     [Test]
     public async Task CollectionSnapshot_ConcurrentMutations_DoNotInvalidateEnumeration() {
-        var collection = new OperationCollection();
+        var collection = new OperationCollection(new OperationContext(null));
         IOperationCollection operations = collection;
         var started = NewSignal();
         var enumerate = NewSignal();
@@ -287,8 +287,9 @@ public sealed class OperatorTests {
             started.SetResult();
             enumerate.Task.GetAwaiter().GetResult();
             for (var index = 0; index < 500; index++) {
-                var item = new Operation($"root {index}", (_, _) => Task.CompletedTask);
+                var item = new Operation($"root {index}", (_, _) => Task.CompletedTask, collection.Context);
                 collection.Add(item);
+                item.Prepare();
                 item.Start();
                 Assert.That(collection.Remove(item), Is.True);
             }

@@ -19,7 +19,7 @@ dotnet run --project samples/Brows.Operations.Sample
                        Style="{StaticResource ShowcaseOperatorStyle}" />
 ```
 
-The window uses the package's XAML namespace, `http://schemas.brows.app/winfx/2026/xaml/presentation`. Its operator is created through the imported `IOperatorFactory`. The sample calls `Operate` on the WPF dispatcher with the default `synchronizeWithCurrentContext: true`, capturing its synchronization context for root and child observable collection changes. Passing `false` disables collection dispatch for that root and its descendants; keep the default for this sample's UI binding. Scenario work and progress reports also stay on the dispatcher in this sample; the library allows them on worker threads and does not dispatch property-change notifications. State updates across an operation tree must still be serialized.
+The window uses the package's XAML namespace, `http://schemas.brows.app/winfx/2026/xaml/presentation`. Its operator is created through the imported `IOperatorFactory` on the WPF dispatcher thread, so operation state, notifications, and collection changes run on the dispatcher. The **Parallel batch** scenario runs its children with `Task.Run` and reports progress from thread-pool workers; the operator posts those reports to the dispatcher.
 
 | Property | Template data context / purpose |
 | --- | --- |

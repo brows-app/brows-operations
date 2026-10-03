@@ -4,10 +4,8 @@ namespace Brows.Operations;
 
 /// <summary>Provides access to the root operations tracked by an operator.</summary>
 /// <remarks>
-/// By default, root additions and removals use the synchronization context captured by each root's
-/// Operate call. With synchronizeWithCurrentContext set to false or no context available, mutations
-/// run on the thread making each change. Property-change notifications
-/// are not dispatched. <see cref="Snapshot"/> can be enumerated while roots are added or removed.
+/// Root additions, removals, and notifications run on the operator's synchronization context; see
+/// <see cref="IOperator"/>. <see cref="Count"/> and <see cref="Snapshot"/> can be used from any thread.
 /// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>
@@ -24,8 +22,7 @@ public interface IOperationCollection {
     /// still running, or not in this collection.
     /// </returns>
     /// <remarks>
-    /// Removal synchronously dispatches the collection mutation to the operation's captured context,
-    /// or runs on the calling thread when context capture was disabled or no context was available.
+    /// Removal runs synchronously on the operator's context, sending to it when called from another thread.
     /// </remarks>
     bool Remove(IOperation item);
 
@@ -39,9 +36,8 @@ public interface IOperationCollection {
     /// </param>
     /// <returns>The number of operations removed.</returns>
     /// <remarks>
-    /// Each removal synchronously dispatches the collection mutation to the operation's captured context.
-    /// When context capture was disabled or no context was available, removal runs on the calling thread.
-    /// Completed operations are selected from a snapshot of the collection.
+    /// Selection and removal run synchronously on the operator's context, sending to it when called
+    /// from another thread.
     /// </remarks>
     int RemoveComplete(bool? withError = null);
 }

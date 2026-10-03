@@ -9,10 +9,10 @@ namespace Brows.Windows.Controls;
 /// <remarks>
 /// Supports the built-in operators created by <c>IOperatorFactory</c>. Relevant operations and
 /// their ancestor paths are displayed with progress, errors, and cancellation or removal commands.
-/// Access the control and start operations on the WPF dispatcher with Operate's default
-/// synchronizeWithCurrentContext value of true so it captures the dispatcher synchronization
-/// context for root and child collection changes. Progress reports may run on
-/// worker threads; property-change notifications are not dispatched by the operations library.
+/// Create the operator on the control's dispatcher thread, such as by calling <c>IOperatorFactory.Create</c>
+/// there, so operation state and collection changes run on that dispatcher. Setting an operator created
+/// elsewhere throws <see cref="InvalidOperationException"/>. Operations can be started and report progress
+/// from any thread.
 /// Built-in Cancel and Remove commands deliver CanExecuteChanged on their creating dispatcher;
 /// changes raised on workers are queued asynchronously to that dispatcher.
 /// </remarks>
@@ -49,9 +49,16 @@ sealed partial class OperatorControl {
             defaultValue: null,
             propertyChangedCallback: (s, e) => {
                 if (s is OperatorControl self) {
-                    self.OperationCollection = e.NewValue is IOperator @operator
+                    var collection = e.NewValue is IOperator @operator
                         ? @operator.Operations as OperationCollection
                         : null;
+                    if (collection is not null && !collection.Context.IsOwnedBy(self.Dispatcher.Thread)) {
+                        self.OperationCollection = null;
+                        throw new InvalidOperationException(
+                            "The operator must be created on this control's dispatcher thread, " +
+                            "while its dispatcher synchronization context is current.");
+                    }
+                    self.OperationCollection = collection;
                 }
             }));
 

@@ -11,7 +11,7 @@ internal sealed class OperationBaseCollection : IEnumerable<OperationBase> {
         Observable;
 
     public void Add(OperationBase item) {
-        item.SynchronizeCollectionChange(() => Observable.Add(item));
+        Observable.Add(item);
     }
 
     IEnumerator<OperationBase> IEnumerable<OperationBase>.GetEnumerator() {

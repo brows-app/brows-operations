@@ -1,6 +1,5 @@
 ﻿using System;
 using System.ComponentModel;
-using System.Threading;
 
 namespace Brows.Operations;
 
@@ -32,7 +31,7 @@ internal sealed class Operation : OperationBase {
         Removed?.Invoke(this, EventArgs.Empty);
     }
 
-    public Operation(string name, OperationDelegate task, SynchronizationContext synchronizationContext = null)
-    : base(name, null, task, synchronizationContext) {
+    public Operation(string name, OperationDelegate task, OperationContext context)
+    : base(name, null, task, context) {
     }
 }

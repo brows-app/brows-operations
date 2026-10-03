@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 
 namespace Brows.Operations;
 
@@ -39,6 +40,25 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         }
     }
 
+    private bool RemoveCore(Operation item) {
+        if (item.Complete != true) {
+            return false;
+        }
+        bool removed;
+        lock (Collection) {
+            removed = Collection.Remove(item);
+        }
+        if (removed) {
+            if (item.Relevant) {
+                Relevance--;
+            }
+            NotifyPropertyChanged(CountEvent);
+        }
+        item.RelevantChanged -= Item_RelevantChanged;
+        return removed;
+    }
+
+    public OperationContext Context { get; }
     public bool Relevant => Relevance > 0;
     public int Count {
         get {
@@ -49,41 +69,35 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
     }
     public IEnumerable Source => field ??= new ReadOnlyObservableCollection<Operation>(Collection);
 
+    public OperationCollection() : this(new OperationContext(SynchronizationContext.Current)) {
+    }
+
+    public OperationCollection(OperationContext context) {
+        Context = context ?? throw new ArgumentNullException(nameof(context));
+    }
+
     public void Add(Operation item) {
         if (item is null) throw new ArgumentNullException(nameof(item));
-        if (item.Relevant) {
-            Relevance++;
+        if (item.Context != Context) {
+            throw new ArgumentException(paramName: nameof(item), message: "Operation context mismatch.");
         }
-        item.RelevantChanged += Item_RelevantChanged;
-        item.SynchronizeCollectionChange(() => {
+        Context.Invoke(() => {
+            if (item.Relevant) {
+                Relevance++;
+            }
+            item.RelevantChanged += Item_RelevantChanged;
             lock (Collection) {
                 Collection.Add(item);
             }
+            NotifyPropertyChanged(CountEvent);
         });
-        NotifyPropertyChanged(CountEvent);
     }
 
     public bool Remove(Operation item) {
         if (item is null) {
             return false;
         }
-        if (item.Complete != true) {
-            return false;
-        }
-        var removed = false;
-        item.SynchronizeCollectionChange(() => {
-            lock (Collection) {
-                removed = Collection.Remove(item);
-            }
-        });
-        if (removed) {
-            if (item.Relevant) {
-                Relevance--;
-            }
-            NotifyPropertyChanged(CountEvent);
-        }
-        item.RelevantChanged -= Item_RelevantChanged;
-        return removed;
+        return Context.Send(() => RemoveCore(item));
     }
 
     IReadOnlyList<IOperation> IOperationCollection.Snapshot() {
@@ -100,13 +114,15 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             false => i => i.Complete && !i.CompleteWithError,
             _ => i => i.Complete
         };
-        var itemsRemoved = 0;
-        var itemsToRemove = Snapshot().Where(predicate).ToList();
-        foreach (var item in itemsToRemove) {
-            if (Remove(item as Operation)) {
-                itemsRemoved++;
+        return Context.Send(() => {
+            var itemsRemoved = 0;
+            var itemsToRemove = Snapshot().Where(predicate).ToList();
+            foreach (var item in itemsToRemove) {
+                if (RemoveCore((Operation)item)) {
+                    itemsRemoved++;
+                }
             }
-        }
-        return itemsRemoved;
+            return itemsRemoved;
+        });
     }
 }

@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,6 +22,21 @@ public sealed class OperatorTests {
 
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static T GetPrivateField<T>(OperationBase operation, string fieldName) =>
+        (T)typeof(OperationBase)
+            .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(operation);
+
+    private static bool IsDisposed(CancellationTokenSource tokenSource) {
+        try {
+            _ = tokenSource.Token;
+            return false;
+        }
+        catch (ObjectDisposedException) {
+            return true;
+        }
+    }
 
     private static async Task<OperationBase[]> WaitForChildren(OperationBase operation, int count = 1) {
         var children = (IList)operation.ChildSource;
@@ -1000,6 +1016,161 @@ public sealed class OperatorTests {
                 Assert.That(childToken.IsCancellationRequested, Is.True);
                 Assert.That(operation.Complete, Is.True);
                 Assert.That(operation.CompleteWithError, Is.False);
+            }
+        });
+
+    /// <summary>
+    /// Verifies that subtree cancellation releases each active operation's token source lease.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [TestCase(false)]
+    [TestCase(true)]
+    public Task OperationCancellation_ReleasesEveryActiveTreeLeaseToItsOwner(bool throwCallback) =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            var rootStarted = NewSignal<CancellationToken>();
+            var childStarted = NewSignal<CancellationToken>();
+            var grandchildStarted = NewSignal<CancellationToken>();
+            var operation = Start(@operator, "root", async (progress, token) => {
+                rootStarted.TrySetResult(token);
+                await progress.Child("child", async (childProgress, childToken) => {
+                    childStarted.TrySetResult(childToken);
+                    await childProgress.Child("grandchild", async (_, grandchildToken) => {
+                        if (throwCallback) {
+                            grandchildToken.Register(() => throw new InvalidOperationException("callback failure"));
+                        }
+                        grandchildStarted.TrySetResult(grandchildToken);
+                        try {
+                            await Task.Delay(Timeout.InfiniteTimeSpan, grandchildToken);
+                        }
+                        catch (OperationCanceledException) when (grandchildToken.IsCancellationRequested) {
+                        }
+                    });
+                    try {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, childToken);
+                    }
+                    catch (OperationCanceledException) when (childToken.IsCancellationRequested) {
+                    }
+                });
+                try {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) {
+                }
+            });
+
+            await rootStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await grandchildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var child = (await WaitForChildren(operation)).Single();
+            var grandchild = (await WaitForChildren(child)).Single();
+            var operations = new[] { operation, child, grandchild };
+            var tokenSources = operations
+                .Select(item => GetPrivateField<CancellationTokenSource>(item, "TokenSource"))
+                .ToArray();
+
+            AggregateException cancellationError = null;
+            try {
+                operation.Cancel();
+            }
+            catch (AggregateException exception) {
+                cancellationError = exception;
+            }
+            await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+            using (Assert.EnterMultipleScope()) {
+                if (throwCallback) {
+                    Assert.That(cancellationError?.InnerExceptions.SingleOrDefault(),
+                                Is.InstanceOf<InvalidOperationException>());
+                }
+                else {
+                    Assert.That(cancellationError, Is.Null);
+                }
+                foreach (var item in operations) {
+                    Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"), Is.Zero, item.Name);
+                    Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.False, item.Name);
+                }
+                Assert.That(tokenSources.All(IsDisposed), Is.True);
+            }
+        });
+
+    /// <summary>
+    /// Verifies that completed descendants release cancellation leases after a held callback returns.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [Test]
+    public Task OperationCancellation_ReleasesCompletedDescendantLeasesAfterCallbacksFinish() =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            var rootStarted = NewSignal<CancellationToken>();
+            var childStarted = NewSignal<CancellationToken>();
+            var grandchildStarted = NewSignal<CancellationToken>();
+            var callbackEntered = NewSignal();
+            var releaseCallback = NewSignal();
+            var releaseGrandchild = NewSignal();
+            var operation = Start(@operator, "root", async (progress, token) => {
+                rootStarted.TrySetResult(token);
+                await progress.Child("child", async (childProgress, childToken) => {
+                    childStarted.TrySetResult(childToken);
+                    await childProgress.Child("grandchild", async (_, grandchildToken) => {
+                        grandchildToken.Register(() => {
+                            callbackEntered.TrySetResult();
+                            releaseCallback.Task.GetAwaiter().GetResult();
+                        });
+                        grandchildStarted.TrySetResult(grandchildToken);
+                        await releaseGrandchild.Task;
+                    });
+                });
+            });
+            Task cancellation = null;
+            try {
+                await rootStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await grandchildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var child = (await WaitForChildren(operation)).Single();
+                var grandchild = (await WaitForChildren(child)).Single();
+                var operations = new[] { operation, child, grandchild };
+                var tokenSources = operations
+                    .Select(item => GetPrivateField<CancellationTokenSource>(item, "TokenSource"))
+                    .ToArray();
+
+                cancellation = Task.Run(operation.Cancel);
+                await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                releaseGrandchild.TrySetResult();
+                await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+                using (Assert.EnterMultipleScope()) {
+                    foreach (var item in operations) {
+                        Assert.That(item.Complete, Is.True, item.Name);
+                        Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"),
+                                    Is.EqualTo(1), item.Name);
+                        Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.True, item.Name);
+                    }
+                    Assert.That(tokenSources.All(tokenSource => !IsDisposed(tokenSource)), Is.True);
+                }
+
+                releaseCallback.TrySetResult();
+                await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+
+                using (Assert.EnterMultipleScope()) {
+                    foreach (var item in operations) {
+                        Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"), Is.Zero, item.Name);
+                        Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.False, item.Name);
+                    }
+                    Assert.That(tokenSources.All(IsDisposed), Is.True);
+                }
+            }
+            finally {
+                releaseGrandchild.TrySetResult();
+                releaseCallback.TrySetResult();
+                if (cancellation is not null) {
+                    await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
             }
         });
 

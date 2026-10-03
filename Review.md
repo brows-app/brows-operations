@@ -175,6 +175,26 @@ Completion-listener propagation and delegate-error publication coverage is in [N
 
 ## WPF threading follow-up, October 3, 2026
 
+### 18. Resolved — Descendant cancellation leases are released against the root
+
+**Fix:** Cancellation leases now retain both their owning `OperationBase` and token source. The cancellation
+`finally` path releases each lease through its owner, preserving deferred disposal until that owner's final
+cancellation lease is released. Callback exception aggregation remains unchanged.
+
+**Locations:** [OperationBase.cs](source/Brows.Operations/Operations/OperationBase.cs:67),
+`OperationBase.cs:77`, `:332`, and `:407`.
+
+`Cancel` increments `TokenSourceCancellationCount` for each active operation in the subtree. Previously, it
+stored only each token source, then released every lease through the operation whose `Cancel` method was
+called. A root with an active child therefore left the root count negative and the child count at one. With
+grandchildren, every descendant retained a positive count and could defer disposal indefinitely; root
+completion could also defer disposal if its count had already become negative.
+
+The new root, child, and grandchild regressions assert each owner's count and disposal state. A held
+grandchild cancellation callback verifies that all three operations can complete while their leases remain
+held, then all sources are disposed after the callback returns. A parameterized case also verifies cleanup
+when a descendant callback throws.
+
 ### 19. Resolved — State notifications invoke subscribers while holding the state lock
 
 **Fix:** `agent/19/notifications-outside-lock` batches notifications on the updating thread and publishes
@@ -230,4 +250,16 @@ and finish without a lock cycle.
   listener exception propagation, collection scheduling after exceptions, and committed finalization state.
 - Composition test assemblies contain no discoverable tests. No public API members were added.
 
-Issue 19 is resolved in `F:/dev/me/agent-brows-operations-19`. Issues 18 and 20 remain open.
+Issue 19 is resolved in `F:/dev/me/agent-brows-operations-19`. Issue 18 is resolved in this worktree;
+issue 20 remains open.
+
+## Fix validation for issue 18
+
+- All three new cancellation-lease regression cases failed on the unfixed implementation with the root
+  counter at `-2`, descendant counters at `1`, and descendant token sources still undisposed.
+- After the fix, the three regressions and existing callback-failure test passed on `net10.0`.
+- The full core test project passed **104 cases** on each of `net462`, `net48`, `net8.0`, and `net10.0`.
+- Full solution Release build passed with zero warnings and zero errors.
+- Full solution tests passed: 104 core cases and 48 WPF cases on each supported target framework.
+  Composition test projects contain no discoverable tests.
+- No public API members were added.

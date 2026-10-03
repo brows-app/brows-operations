@@ -46,16 +46,6 @@ internal class OperationBase : Notifier, IOperation {
     private readonly ProgressChangeContext ProgressChange;
     private readonly OperationBaseCollection ChildCollection = [];
 
-    private void RecordFailure(Exception ex) {
-        if (Log.Warn()) {
-            Log.Warn(ex);
-        }
-        if (Error is null) {
-            Error = ex;
-        }
-        Relevant = true;
-    }
-
     private OperationBase Register(string name, OperationDelegate task) {
         if (CancellationRequested) {
             throw new OperationCanceledException("The parent operation has been canceled.");
@@ -148,7 +138,26 @@ internal class OperationBase : Notifier, IOperation {
         finally {
             change.Depth--;
             if (change.Depth == 0) {
-                Flush(change);
+                static void flush(ProgressChangeContext change) {
+                    if (change.Dispatching) {
+                        return;
+                    }
+                    change.Dispatching = true;
+                    try {
+                        while (change.Notifications.TryDequeue(out var notification)) {
+                            if (notification.Target) {
+                                notification.Operation.NotifyTargetChanged();
+                            }
+                            if (notification.Progress) {
+                                notification.Operation.NotifyProgressChanged();
+                            }
+                        }
+                    }
+                    finally {
+                        change.Dispatching = false;
+                    }
+                }
+                flush(change);
             }
         }
         void core() {
@@ -206,46 +215,6 @@ internal class OperationBase : Notifier, IOperation {
         }
     }
 
-    private static void Flush(ProgressChangeContext change) {
-        if (change.Dispatching) {
-            return;
-        }
-        change.Dispatching = true;
-        try {
-            while (change.Notifications.TryDequeue(out var notification)) {
-                if (notification.Target) {
-                    notification.Operation.NotifyTargetChanged();
-                }
-                if (notification.Progress) {
-                    notification.Operation.NotifyProgressChanged();
-                }
-            }
-        }
-        finally {
-            change.Dispatching = false;
-        }
-    }
-
-    private void Finish() {
-        Stopwatch?.Stop();
-        var source = TokenSource;
-        TokenSource = null;
-        if (source is not null) {
-            Context.Dispose(source);
-        }
-        Progressing = false;
-        CompleteWithError = Error is not null || ChildCollection.Any(child => child.CompleteWithError);
-        if (CompleteWithError) {
-            Relevant = true;
-        }
-        else if (Target == 0) {
-            ProgressPercent = 100;
-            NotifyPropertyChanged(ProgressPercentEvent);
-        }
-        Complete = true;
-        Completed?.Invoke(this, EventArgs.Empty);
-    }
-
     private async Task Operate() {
         if (Log.Info()) {
             Log.Info(nameof(Operate));
@@ -272,7 +241,15 @@ internal class OperationBase : Notifier, IOperation {
                     }
                 }
                 else {
-                    await Context.InvokeAsync(() => RecordFailure(taskError));
+                    await Context.InvokeAsync(() => {
+                        if (Log.Warn()) {
+                            Log.Warn(taskError);
+                        }
+                        if (Error is null) {
+                            Error = taskError;
+                        }
+                        Relevant = true;
+                    });
                 }
             }
         }
@@ -285,7 +262,25 @@ internal class OperationBase : Notifier, IOperation {
                 await TASK.WhenAll(children.Select(child => child.Completion));
             }
             finally {
-                await Context.InvokeAsync(Finish);
+                await Context.InvokeAsync(() => {
+                    Stopwatch?.Stop();
+                    var source = TokenSource;
+                    TokenSource = null;
+                    if (source is not null) {
+                        Context.Dispose(source);
+                    }
+                    Progressing = false;
+                    CompleteWithError = Error is not null || ChildCollection.Any(child => child.CompleteWithError);
+                    if (CompleteWithError) {
+                        Relevant = true;
+                    }
+                    else if (Target == 0) {
+                        ProgressPercent = 100;
+                        NotifyPropertyChanged(ProgressPercentEvent);
+                    }
+                    Complete = true;
+                    Completed?.Invoke(this, EventArgs.Empty);
+                });
             }
         }
     }
@@ -337,13 +332,6 @@ internal class OperationBase : Notifier, IOperation {
         }
     }
 
-    private static async void ObserveCompletion(Task completion) {
-        /*
-         * Surface unexpected root failures through the operator's synchronization context.
-         */
-        await completion;
-    }
-
     internal OperationContext Context { get; }
 
     internal void Prepare() {
@@ -369,7 +357,13 @@ internal class OperationBase : Notifier, IOperation {
         }
         _ = RunOperation();
         if (Parent is null) {
-            Context.Invoke(() => ObserveCompletion(Completion));
+            static async void observeCompletion(Task completion) {
+                /*
+                 * Surface unexpected root failures through the operator's synchronization context.
+                 */
+                await completion;
+            }
+            Context.Invoke(() => observeCompletion(Completion));
         }
     }
 

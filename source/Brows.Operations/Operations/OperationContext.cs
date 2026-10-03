@@ -10,8 +10,22 @@ internal sealed class OperationContext {
     [ThreadStatic]
     private static OperationContext Draining;
 
-    private readonly object Gate = new();
-    private readonly object QueueGate = new();
+    private readonly
+#if NET9_0_OR_GREATER
+        Lock
+#else
+        object
+#endif
+        Gate = new();
+
+    private readonly
+#if NET9_0_OR_GREATER
+        Lock
+#else
+        object
+#endif
+        QueueGate = new();
+
     private readonly Queue<Action> Work = new();
     private readonly Dictionary<object, ProgressReport> PendingReports = [];
     private readonly int OwnerThreadId;
@@ -23,7 +37,7 @@ internal sealed class OperationContext {
         var post = false;
         lock (QueueGate) {
             Work.Enqueue(work);
-            if (!Scheduled) {
+            if (Scheduled != true) {
                 Scheduled = true;
                 post = true;
             }
@@ -51,7 +65,7 @@ internal sealed class OperationContext {
             Draining = this;
             try {
                 if (previous != this) {
-                    DrainQueue();
+                    drainQueue();
                 }
                 action?.Invoke();
             }
@@ -59,45 +73,34 @@ internal sealed class OperationContext {
                 Draining = previous;
             }
         }
-    }
-
-    private void DrainQueue() {
-        while (true) {
-            Action work;
-            lock (QueueGate) {
-                if (Work.Count == 0) {
-                    Scheduled = false;
-                    return;
-                }
-                work = Work.Dequeue();
-            }
-            try {
-                work();
-            }
-            catch {
-                /*
-                 * Surface the failure on this context without stranding work queued behind it.
-                 */
-                var post = false;
+        void drainQueue() {
+            while (true) {
+                Action work;
                 lock (QueueGate) {
-                    Scheduled = Work.Count > 0 && SynchronizationContext is not null;
-                    post = Scheduled;
+                    if (Work.Count == 0) {
+                        Scheduled = false;
+                        return;
+                    }
+                    work = Work.Dequeue();
                 }
-                if (post) {
-                    Post();
+                try {
+                    work();
                 }
-                throw;
+                catch {
+                    /*
+                     * Surface the failure on this context without stranding work queued behind it.
+                     */
+                    var post = false;
+                    lock (QueueGate) {
+                        Scheduled = Work.Count > 0 && SynchronizationContext is not null;
+                        post = Scheduled;
+                    }
+                    if (post) {
+                        Post();
+                    }
+                    throw;
+                }
             }
-        }
-    }
-
-    private ProgressReport TakeReport(object key) {
-        lock (QueueGate) {
-            if (PendingReports.TryGetValue(key, out var report)) {
-                PendingReports.Remove(key);
-                return report;
-            }
-            return null;
         }
     }
 
@@ -164,7 +167,9 @@ internal sealed class OperationContext {
     }
 
     public T Send<T>(Func<T> func) {
-        if (func is null) throw new ArgumentNullException(nameof(func));
+        if (func is null) {
+            throw new ArgumentNullException(nameof(func));
+        }
         var result = default(T);
         if (IsCurrent) {
             Run(() => result = func());
@@ -184,12 +189,18 @@ internal sealed class OperationContext {
     }
 
     public void Report(object key, ProgressReport report, Action<ProgressReport> apply) {
-        if (key is null) throw new ArgumentNullException(nameof(key));
-        if (report is null) throw new ArgumentNullException(nameof(report));
-        if (apply is null) throw new ArgumentNullException(nameof(apply));
+        if (key is null) {
+            throw new ArgumentNullException(nameof(key));
+        }
+        if (report is null) {
+            throw new ArgumentNullException(nameof(report));
+        }
+        if (apply is null) {
+            throw new ArgumentNullException(nameof(apply));
+        }
         if (IsCurrent) {
             Run(() => {
-                var pending = TakeReport(key);
+                var pending = takeReport(key);
                 apply(pending is null ? report : pending.Merge(report));
             });
             return;
@@ -206,11 +217,20 @@ internal sealed class OperationContext {
         }
         if (enqueue) {
             Enqueue(() => {
-                var pending = TakeReport(key);
+                var pending = takeReport(key);
                 if (pending is not null) {
                     apply(pending);
                 }
             });
+        }
+        ProgressReport takeReport(object key) {
+            lock (QueueGate) {
+                if (PendingReports.TryGetValue(key, out var report)) {
+                    PendingReports.Remove(key);
+                    return report;
+                }
+                return null;
+            }
         }
     }
 
@@ -230,7 +250,9 @@ internal sealed class OperationContext {
     }
 
     public void Dispose(CancellationTokenSource source) {
-        if (source is null) throw new ArgumentNullException(nameof(source));
+        if (source is null) {
+            throw new ArgumentNullException(nameof(source));
+        }
         if (CancellationDepth > 0) {
             /*
              * Completion can run inline from a cancellation callback; dispose after Cancel returns.

@@ -34,7 +34,9 @@ internal sealed class ProgressReport {
     }
 
     public ProgressReport Merge(ProgressReport next) {
-        if (next is null) throw new ArgumentNullException(nameof(next));
+        if (next is null) {
+            throw new ArgumentNullException(nameof(next));
+        }
         /*
          * Each report applies its set value before its added value. A later set value therefore
          * replaces everything earlier, while later added values accumulate.

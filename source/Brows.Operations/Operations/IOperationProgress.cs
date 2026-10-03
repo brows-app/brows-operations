@@ -9,6 +9,8 @@ namespace Brows.Operations;
 /// Progress reports and child registration may run outside the synchronization context captured
 /// by Operate. Only observable collection changes are dispatched to that context; property-change
 /// notifications run on the thread updating state. Serialize state updates across the operation tree.
+/// When Operate disables context capture with synchronizeWithCurrentContext set to false, or no
+/// context is available, observable collection changes also run on the thread making each change.
 /// Register children before the operation's delegate returns; the operation waits for all registered descendants.
 /// </remarks>
 public interface IOperationProgress {
@@ -47,7 +49,8 @@ public interface IOperationProgress {
     /// <exception cref="OperationCanceledException">Cancellation has already been requested for the parent.</exception>
     /// <remarks>
     /// The child's delegate starts immediately after its collection addition has completed on the
-    /// context captured by the root's Operate call. Its ordinary failures are recorded on the child
+    /// context captured by the root's Operate call, or on the calling thread when context capture
+    /// was disabled or no context was available. Its ordinary failures are recorded on the child
     /// and contribute to the parent's error state, but do not fault the returned task.
     /// Successful awaiting indicates completion, rather than successful work. Registration failures
     /// and unexpected completion-task failures propagate through the returned task.

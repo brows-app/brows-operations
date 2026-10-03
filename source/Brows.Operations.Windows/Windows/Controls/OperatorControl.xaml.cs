@@ -9,8 +9,9 @@ namespace Brows.Windows.Controls;
 /// <remarks>
 /// Supports the built-in operators created by <c>IOperatorFactory</c>. Relevant operations and
 /// their ancestor paths are displayed with progress, errors, and cancellation or removal commands.
-/// Access the control and start operations on the WPF dispatcher so Operate captures its
-/// synchronization context for root and child collection changes. Progress reports may run on
+/// Access the control and start operations on the WPF dispatcher with Operate's default
+/// synchronizeWithCurrentContext value of true so it captures the dispatcher synchronization
+/// context for root and child collection changes. Progress reports may run on
 /// worker threads; property-change notifications are not dispatched by the operations library.
 /// Built-in Cancel and Remove commands deliver CanExecuteChanged on their creating dispatcher;
 /// changes raised on workers are queued asynchronously to that dispatcher.

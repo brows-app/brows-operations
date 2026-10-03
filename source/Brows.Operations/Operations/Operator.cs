@@ -8,9 +8,11 @@ internal sealed class Operator : IOperator {
     public IOperationCollection Operations =>
         OperationCollection;
 
-    public void Operate(string name, OperationDelegate task) {
+    public void Operate(string name, OperationDelegate task, bool synchronizeWithCurrentContext) {
         var
-        manager = new OperationManager(OperationCollection, SynchronizationContext.Current);
+        manager = new OperationManager(OperationCollection, synchronizeWithCurrentContext
+            ? SynchronizationContext.Current
+            : null);
         manager.Operate(name, task);
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
@@ -42,28 +43,32 @@ public sealed class SynchronizationTests {
         }
     });
 
-    /// <summary>Verifies that descendants inherit the context captured at each Operate call.</summary>
+    /// <summary>Verifies that each Operate call applies its context option to descendants.</summary>
+    /// <param name="synchronize">The context option, or null to use the default.</param>
     /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public async Task Operate_CapturesContextPerCallAndPassesItToDescendants() {
+    [TestCase(null)]
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Operate_AppliesContextOptionPerCallAndPassesItToDescendants(bool? synchronize) {
         IOperator @operator = new Operator();
         for (var run = 0; run < 2; run++) {
+            var synchronizeThisCall = run == 0 ? synchronize : synchronize == false;
             await UiTestThread.Run(async () => {
                 var context = SynchronizationContext.Current;
                 var uiThread = Environment.CurrentManagedThreadId;
                 var release = NewSignal();
-                var mutations = new List<(SynchronizationContext Context, int Thread, int Depth)>();
+                var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
                 Operation root = null;
                 void Subscribe(OperationBase parent) {
                     ((INotifyCollectionChanged)parent.ChildSource).CollectionChanged += (_, e) => {
                         var child = (OperationBase)e.NewItems[0];
-                        mutations.Add((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
+                        mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
                         Subscribe(child);
                     };
                 }
                 var source = (INotifyCollectionChanged)@operator.Operations.Source;
                 NotifyCollectionChangedEventHandler changed = (_, e) => {
-                    mutations.Add((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
+                    mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
                     if (e.Action == NotifyCollectionChangedAction.Add) {
                         root = (Operation)e.NewItems[0];
                         Subscribe(root);
@@ -71,7 +76,8 @@ public sealed class SynchronizationTests {
                 };
                 source.CollectionChanged += changed;
                 try {
-                    @operator.Operate("root", async (progress, _) => {
+                    OperationDelegate task = async (progress, _) => {
+                        Assert.That(SynchronizationContext.Current, Is.SameAs(context));
                         await release.Task.ConfigureAwait(false);
                         await progress.Children(new[] { 1, 2 }, index => new OperationChild($"child {index}",
                             async (childProgress, _) => {
@@ -79,13 +85,24 @@ public sealed class SynchronizationTests {
                                     await childProgress.Child("grandchild", (_, _) => Task.CompletedTask);
                                 }, CancellationToken.None).ConfigureAwait(false);
                             })).ConfigureAwait(false);
-                    });
+                    };
+                    if (synchronizeThisCall.HasValue) {
+                        @operator.Operate("root", task, synchronizeWithCurrentContext: synchronizeThisCall.Value);
+                    }
+                    else {
+                        @operator.Operate("root", task);
+                    }
                     Assert.That(root, Is.Not.Null);
                     release.SetResult(true);
                     await root.Completion.WaitAsync(Timeout);
                     using (Assert.EnterMultipleScope()) {
                         Assert.That(mutations.Select(item => item.Depth).OrderBy(depth => depth), Is.EqualTo(new[] { 0, 0, 1, 1, 2, 2 }));
-                        Assert.That(mutations.All(item => item.Context == context && item.Thread == uiThread), Is.True);
+                        Assert.That(mutations.Where(item => item.Depth == 0)
+                            .All(item => item.Context == context && item.Thread == uiThread), Is.True);
+                        Assert.That(mutations.Where(item => item.Depth > 0)
+                            .All(item => synchronizeThisCall == false
+                                ? item.Context is null && item.Thread != uiThread
+                                : item.Context == context && item.Thread == uiThread), Is.True);
                         Assert.That(@operator.Operations.Count, Is.Zero);
                     }
                 }
@@ -97,19 +114,25 @@ public sealed class SynchronizationTests {
         }
     }
 
-    /// <summary>Verifies all public and command removal paths use the operation's captured context.</summary>
+    /// <summary>Verifies all public and command removal paths honor the operation's context option.</summary>
     /// <param name="removal">The removal API to exercise.</param>
+    /// <param name="synchronize">Whether to dispatch collection changes to the captured context.</param>
     /// <returns>A task representing execution of the test.</returns>
-    [TestCase("collection")]
-    [TestCase("command")]
-    [TestCase("all")]
-    [TestCase("errors")]
-    public Task WorkerRemoval_MutatesRootCollectionOnCapturedContext(string removal) =>
+    [TestCase("collection", true)]
+    [TestCase("collection", false)]
+    [TestCase("command", true)]
+    [TestCase("command", false)]
+    [TestCase("all", true)]
+    [TestCase("all", false)]
+    [TestCase("errors", true)]
+    [TestCase("errors", false)]
+    public Task WorkerRemoval_HonorsContextOption(string removal, bool synchronize) =>
         UiTestThread.Run(async () => {
             IOperator @operator = new Operator();
             var context = SynchronizationContext.Current;
             var uiThread = Environment.CurrentManagedThreadId;
-            @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")));
+            @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")),
+                synchronizeWithCurrentContext: synchronize);
             var root = (Operation)@operator.Operations.AsEnumerable().Single();
             SynchronizationContext mutationContext = null;
             var mutationThread = 0;
@@ -119,7 +142,9 @@ public sealed class SynchronizationTests {
                 mutationThread = Environment.CurrentManagedThreadId;
                 count++;
             };
+            var workerThread = 0;
             var removed = await Task.Run(() => {
+                workerThread = Environment.CurrentManagedThreadId;
                 switch (removal) {
                     case "collection": return @operator.Operations.Remove(root) ? 1 : 0;
                     case "command": root.Remove(); return 1;
@@ -130,8 +155,8 @@ public sealed class SynchronizationTests {
             using (Assert.EnterMultipleScope()) {
                 Assert.That(removed, Is.EqualTo(1));
                 Assert.That(count, Is.EqualTo(1));
-                Assert.That(mutationContext, Is.SameAs(context));
-                Assert.That(mutationThread, Is.EqualTo(uiThread));
+                Assert.That(mutationContext, Is.SameAs(synchronize ? context : null));
+                Assert.That(mutationThread, Is.EqualTo(synchronize ? uiThread : workerThread));
                 Assert.That(@operator.Operations.Count, Is.Zero);
             }
         });

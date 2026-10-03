@@ -5,8 +5,9 @@ namespace Brows.Operations;
 
 /// <summary>Provides access to the root operations tracked by an operator.</summary>
 /// <remarks>
-/// Root additions and removals use the synchronization context captured by each root's Operate call.
-/// Without a captured context, mutations run on the calling thread. Property-change notifications
+/// By default, root additions and removals use the synchronization context captured by each root's
+/// Operate call. With synchronizeWithCurrentContext set to false or no context available, mutations
+/// run on the thread making each change. Property-change notifications
 /// are not dispatched. Enumerate live views on the owning UI context and avoid concurrent mutations.
 /// </remarks>
 public interface IOperationCollection {
@@ -34,7 +35,10 @@ public interface IOperationCollection {
     /// <see langword="true"/> if the operation was removed; <see langword="false"/> if it is null,
     /// still running, or not in this collection.
     /// </returns>
-    /// <remarks>Removal synchronously dispatches the collection mutation to the operation's captured context.</remarks>
+    /// <remarks>
+    /// Removal synchronously dispatches the collection mutation to the operation's captured context,
+    /// or runs on the calling thread when context capture was disabled or no context was available.
+    /// </remarks>
     bool Remove(IOperation item);
 
     /// <summary>
@@ -48,6 +52,7 @@ public interface IOperationCollection {
     /// <returns>The number of operations removed.</returns>
     /// <remarks>
     /// Each removal synchronously dispatches the collection mutation to the operation's captured context.
+    /// When context capture was disabled or no context was available, removal runs on the calling thread.
     /// The selection of completed operations enumerates the live collection on the calling thread;
     /// avoid concurrent additions or removals during selection.
     /// </remarks>

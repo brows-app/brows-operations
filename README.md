@@ -48,11 +48,20 @@ Successful root operations are removed from the collection when they finish. Fai
 
 ## UI scheduling
 
-Each `Operate` call captures `SynchronizationContext.Current` and passes it to the root operation and all descendants. Root and child additions, automatic root cleanup, and explicit root removals modify their observable collections on that captured context. Changes made from another context use synchronous dispatch, so collection mutations finish before the calling API continues. Keep the context responsive and await worker tasks instead of blocking the UI thread.
+By default, each `Operate` call captures `SynchronizationContext.Current` and passes it to the root operation and all descendants. The optional `synchronizeWithCurrentContext` parameter defaults to `true`. Root and child additions, automatic root cleanup, and explicit root removals modify their observable collections on that captured context. Changes made from another context use synchronous dispatch, so collection mutations finish before the calling API continues. Keep the context responsive and await worker tasks instead of blocking the UI thread.
 
-For UI binding, call `Operate` on the UI synchronization context, such as the WPF dispatcher. Operator creation does not capture a context. Progress reports and child registration may run on worker threads, including after `ConfigureAwait(false)`. Property-change notifications are raised on the thread updating state and are not dispatched by the library. State updates across an operation tree must still be serialized; collection dispatch does not make progress reporting thread-safe. Enumerate live collections on their owning UI context and avoid concurrent mutations during enumeration or `RemoveComplete` selection.
+For UI binding, call `Operate` on the UI synchronization context, such as the WPF dispatcher, and keep `synchronizeWithCurrentContext` enabled. Operator creation does not capture a context. Progress reports and child registration may run on worker threads, including after `ConfigureAwait(false)`. Property-change notifications are raised on the thread updating state and are not dispatched by the library. State updates across an operation tree must still be serialized; collection dispatch does not make progress reporting thread-safe. Enumerate live collections on their owning UI context and avoid concurrent mutations during enumeration or `RemoveComplete` selection.
 
-If `Operate` is called without a synchronization context, observable collection changes run directly on the calling thread.
+Pass `synchronizeWithCurrentContext: false` to disable collection dispatch for a root and all its descendants, even when a synchronization context is present:
+
+```csharp
+operations.Operate("Background work", async (progress, token) => {
+    await Task.Delay(250, token).ConfigureAwait(false);
+    await progress.Child("Child work", (_, childToken) => Task.Delay(250, childToken));
+}, synchronizeWithCurrentContext: false);
+```
+
+With synchronization disabled, or when no context is available, observable collection changes run directly on the thread making each change. The setting applies separately to each `Operate` call. It does not move the delegate to a worker thread or change normal `await` context capture; a delegate started on the UI can still resume there. Callers must serialize state updates and provide any collection synchronization needed for UI binding.
 
 The WPF control's Cancel and Remove commands deliver `CanExecuteChanged` on their creating dispatcher. Worker notifications are queued asynchronously; notifications already on the dispatcher are delivered immediately.
 

@@ -3,18 +3,18 @@
 namespace Brows.Operations;
 
 internal sealed class Operator : IOperator {
-    private readonly OperationCollection OperationCollection = new();
-    private readonly SynchronizationContext SynchronizationContext;
+    private readonly OperationCollection OperationCollection;
 
     public IOperationCollection Operations =>
         OperationCollection;
 
     public Operator(SynchronizationContext synchronizationContext = null) {
-        SynchronizationContext = synchronizationContext ?? SynchronizationContext.Current;
+        OperationCollection = new OperationCollection(new OperationSynchronization(
+            synchronizationContext ?? SynchronizationContext.Current));
     }
 
     public void Operate(string name, OperationDelegate task) {
-        var manager = new OperationManager(OperationCollection, SynchronizationContext);
+        var manager = new OperationManager(OperationCollection);
         manager.Operate(name, task);
     }
 }

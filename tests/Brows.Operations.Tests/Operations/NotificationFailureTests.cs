@@ -14,16 +14,10 @@ public sealed class NotificationFailureTests {
 
     private static Operation Start(IOperator @operator, OperationDelegate task, Action<Operation> subscribe = null) {
         Operation root = null;
-        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-        NotifyCollectionChangedEventHandler added = (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) {
-                root = (Operation)e.NewItems[0];
-                subscribe?.Invoke(root);
-            }
-        };
-        source.CollectionChanged += added;
-        try { @operator.Operate("root", task); }
-        finally { source.CollectionChanged -= added; }
+        new OperationManager((OperationCollection)@operator.Operations).Operate("root", task, operation => {
+            root = operation;
+            subscribe?.Invoke(root);
+        });
         return root;
     }
 
@@ -62,6 +56,42 @@ public sealed class NotificationFailureTests {
             Assert.That(root.CompleteWithError, Is.EqualTo(fails));
             Assert.That(root.Error, Is.EqualTo(fails ? delegateError : null));
             Assert.That(@operator.Operations.Count, Is.EqualTo(fails ? 1 : 0));
+        }
+    }
+
+    /// <summary>
+    /// Verifies a worker-started root surfaces unexpected completion failures on its captured context.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public async Task CompletionListenerFailure_FromWorkerStart_UsesCapturedContext() {
+        IOperator @operator = null;
+        Operation root = null;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var listenerError = new IOException("completion observer");
+        Exception observed = null;
+        try {
+            await UiTestThread.Run(async () => {
+                @operator = new Operator();
+                await Task.Run(() => @operator.Operate("root", async (_, _) => await release.Task)).WaitAsync(Timeout);
+                root = (Operation)@operator.Operations.Snapshot().Single();
+                root.Completed += (_, _) => throw listenerError;
+                release.SetResult();
+                try {
+                    await root.Completion.WaitAsync(Timeout);
+                }
+                catch (Exception) {
+                }
+            });
+        }
+        catch (Exception ex) {
+            observed = ex;
+        }
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(observed, Is.SameAs(listenerError));
+            Assert.That(root.Completion.IsFaulted, Is.True);
+            Assert.That(root.Complete, Is.True);
         }
     }
 

@@ -23,15 +23,10 @@ public sealed class OperatorControlTests {
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static Operation Start(IOperator @operator, OperationDelegate task) {
-        Operation result = null;
-        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-        NotifyCollectionChangedEventHandler added = (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) result = (Operation)e.NewItems[0];
-        };
-        source.CollectionChanged += added;
-        try { @operator.Operate("root", task); }
-        finally { source.CollectionChanged -= added; }
-        return result;
+        Operation operation = null;
+        new OperationManager((OperationCollection)@operator.Operations)
+            .Operate("root", task, started => operation = started);
+        return operation;
     }
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject {
@@ -78,10 +73,10 @@ public sealed class OperatorControlTests {
             mutationsOnDispatcher.Add(dispatcher.CheckAccess());
         var rootItems = new ItemsControl { ItemsSource = ((OperationCollection)@operator.Operations).Source };
         var childItems = new ItemsControl { ItemsSource = (IEnumerable)root.ChildSource };
-        Assert.That(rootItems.Items.Count, Is.EqualTo(1));
-        Assert.That(childItems.Items.Count, Is.Zero);
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
+        Assert.That(rootItems.Items.Count, Is.EqualTo(1));
+        Assert.That(childItems.Items.Count, Is.Zero);
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
         await Layout(control);

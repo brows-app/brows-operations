@@ -4,10 +4,11 @@ namespace Brows.Operations;
 
 /// <summary>Provides access to the root operations tracked by an operator.</summary>
 /// <remarks>
-/// By default, root additions and removals use the synchronization context captured by each root's
-/// operator's creation. Collection changes are delivered asynchronously. Property-change
-/// notifications run on the thread updating state. <see cref="Snapshot"/> can be enumerated while
-/// roots are added or removed.
+/// Root membership changes synchronously, while changes to the observable source are posted
+/// asynchronously to the context captured when the operator was created. With no captured context,
+/// observable changes run on the thread making each change. Property-change notifications run on
+/// the thread updating state. <see cref="Snapshot"/> can be enumerated while roots are added or
+/// removed.
 /// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>
@@ -24,8 +25,9 @@ public interface IOperationCollection {
     /// still running, or not in this collection.
     /// </returns>
     /// <remarks>
-    /// Removal synchronously dispatches the collection mutation to the operation's captured context,
-    /// or runs on the calling thread when context capture was disabled or no context was available.
+    /// Membership is updated before this method returns. The observable removal is posted
+    /// asynchronously to the context captured by the operator, or runs on the calling thread when
+    /// no context was captured.
     /// </remarks>
     bool Remove(IOperation item);
 
@@ -39,9 +41,9 @@ public interface IOperationCollection {
     /// </param>
     /// <returns>The number of operations removed.</returns>
     /// <remarks>
-    /// Each removal synchronously dispatches the collection mutation to the operation's captured context.
-    /// When context capture was disabled or no context was available, removal runs on the calling thread.
-    /// Completed operations are selected from a snapshot of the collection.
+    /// Membership changes before this method returns. Observable removals are posted asynchronously
+    /// to the context captured by the operator, or run on the calling thread when no context was
+    /// captured. Completed operations are selected from a snapshot of the collection.
     /// </remarks>
     int RemoveComplete(bool? withError = null);
 }

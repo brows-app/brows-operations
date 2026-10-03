@@ -6,10 +6,10 @@ namespace Brows.Operations;
 
 /// <summary>Reports operation state and starts child operations.</summary>
 /// <remarks>
-/// Progress reports and child registration may run from any thread. The operator dispatches
-/// observable collection changes to the context captured when it was created. Property-change
-/// notifications run on the thread updating state; WPF bindings marshal property updates to their
-/// dispatcher. The operation tree synchronizes its state updates.
+/// Progress reports and child registration may run from any thread. Operation state changes are
+/// synchronized across the tree. Observable collection changes are posted asynchronously to the
+/// context captured when the operator was created. Property-change notifications run on the thread
+/// updating state; WPF bindings marshal bound property updates to their dispatcher.
 /// Register children before the operation's delegate returns; the operation waits for all registered descendants.
 /// </remarks>
 public interface IOperationProgress {
@@ -47,10 +47,12 @@ public interface IOperationProgress {
     /// <exception cref="InvalidOperationException">The parent delegate has already returned.</exception>
     /// <exception cref="OperationCanceledException">Cancellation has already been requested for the parent.</exception>
     /// <remarks>
-    /// The child's delegate starts immediately after its collection addition has completed on the
-    /// context captured by the root's Operate call, or on the calling thread when context capture
-    /// was disabled or no context was available. Its ordinary failures are recorded on the child
-    /// and contribute to the parent's error state, but do not fault the returned task.
+    /// Registration takes effect immediately in the operation tree. The child delegate starts
+    /// synchronously through its first asynchronous wait on the calling thread; its observable
+    /// collection addition is posted asynchronously to the context captured by the operator. With
+    /// no captured context, the collection addition runs on the calling thread. Ordinary failures
+    /// are recorded on the child and contribute to the parent's error state, but do not fault the
+    /// returned task.
     /// Successful awaiting indicates completion, rather than successful work. Registration failures
     /// and unexpected completion-task failures propagate through the returned task.
     /// </remarks>

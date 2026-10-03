@@ -1,10 +1,8 @@
-﻿using System.Threading;
+﻿using System;
 
 namespace Brows.Operations;
 
 internal sealed class OperationManager {
-    private readonly SynchronizationContext SynchronizationContext;
-
     private void Remove(Operation operation) {
         if (operation is null) {
             throw new ArgumentNullException(nameof(operation));
@@ -36,8 +34,7 @@ internal sealed class OperationManager {
     }
 
     private Operation Operation(string name, OperationDelegate task) {
-        var
-        operation = new Operation(name, task, SynchronizationContext);
+        var operation = new Operation(name, task, Operations.Synchronization);
         operation.Completed += Operation_Completed;
         operation.Removed += Operation_Removed;
         return operation;
@@ -47,15 +44,15 @@ internal sealed class OperationManager {
 
     public OperationCollection Operations { get; }
 
-    public OperationManager(OperationCollection operations, SynchronizationContext synchronizationContext = null) {
+    public OperationManager(OperationCollection operations) {
         Operations = operations ?? throw new ArgumentNullException(nameof(operations));
-        SynchronizationContext = synchronizationContext;
     }
 
-    public void Operate(string name, OperationDelegate task) {
+    public void Operate(string name, OperationDelegate task, Action<Operation> beforeStart = null) {
         var
         operation = Operation(name, task);
         Operations.Add(operation);
+        beforeStart?.Invoke(operation);
         operation.Start();
     }
 }

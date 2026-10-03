@@ -33,6 +33,10 @@ internal sealed class Operation : OperationBase {
     }
 
     public Operation(string name, OperationDelegate task, SynchronizationContext synchronizationContext = null)
-    : base(name, null, task, synchronizationContext) {
+    : this(name, task, new OperationSynchronization(synchronizationContext ?? SynchronizationContext.Current)) {
+    }
+
+    internal Operation(string name, OperationDelegate task, OperationSynchronization synchronization)
+    : base(name, null, task, synchronization) {
     }
 }

@@ -13,10 +13,63 @@ namespace Brows.Operations;
 /// <summary>Tests context capture and collection mutations from worker continuations.</summary>
 [TestFixture]
 public sealed class SynchronizationTests {
+    private sealed class QueuedSynchronizationContext : SynchronizationContext {
+        private readonly ConcurrentQueue<(SendOrPostCallback Callback, object State)> Queue = new();
+
+        public int Pending => Queue.Count;
+
+        public override void Post(SendOrPostCallback callback, object state) {
+            Queue.Enqueue((callback, state));
+        }
+
+        public void RunPending() {
+            var previous = Current;
+            SetSynchronizationContext(this);
+            try {
+                while (Queue.TryDequeue(out var work)) {
+                    work.Callback(work.State);
+                }
+            }
+            finally {
+                SetSynchronizationContext(previous);
+            }
+        }
+    }
+
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Verifies collection changes are posted without blocking the operation caller.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Manager_WorkerExecution_PostsChangesAsynchronously() => UiTestThread.Run(async () => {
+        var context = new QueuedSynchronizationContext();
+        var collection = new OperationCollection(new OperationSynchronization(context));
+        var manager = new OperationManager(collection);
+        var changes = new List<(NotifyCollectionChangedAction Action, SynchronizationContext Context)>();
+        ((INotifyCollectionChanged)collection.Source).CollectionChanged += (_, e) =>
+            changes.Add((e.Action, SynchronizationContext.Current));
+
+        await Task.Run(() => manager.Operate("synchronous root", (_, _) => Task.CompletedTask)).WaitAsync(Timeout);
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(changes, Is.Empty);
+            Assert.That(context.Pending, Is.EqualTo(1));
+            Assert.That(collection.Count, Is.Zero);
+        }
+        context.RunPending();
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(changes.Select(change => change.Action), Is.EqualTo(new[] {
+                NotifyCollectionChangedAction.Add,
+                NotifyCollectionChangedAction.Remove
+            }));
+            Assert.That(changes.All(change => change.Context == context), Is.True);
+            Assert.That(collection.Count, Is.Zero);
+        }
+    });
 
     /// <summary>Verifies worker execution marshals root additions and automatic cleanup, but not count notifications.</summary>
     /// <returns>A task representing execution of the test.</returns>
@@ -25,17 +78,23 @@ public sealed class SynchronizationTests {
         var collection = new OperationCollection();
         IOperationCollection operations = collection;
         var context = SynchronizationContext.Current;
-        var manager = new OperationManager(collection, context);
+        var manager = new OperationManager(collection);
         var mutations = new List<SynchronizationContext>();
         var notifications = new List<SynchronizationContext>();
-        ((INotifyCollectionChanged)((OperationCollection)operations).Source).CollectionChanged += (_, _) =>
+        var collectionChanges = NewSignal();
+        ((INotifyCollectionChanged)((OperationCollection)operations).Source).CollectionChanged += (_, _) => {
             mutations.Add(SynchronizationContext.Current);
+            if (mutations.Count == 2) {
+                collectionChanges.TrySetResult(true);
+            }
+        };
         collection.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(IOperationCollection.Count)) {
                 notifications.Add(SynchronizationContext.Current);
             }
         };
         await Task.Run(() => manager.Operate("worker root", (_, _) => Task.CompletedTask)).WaitAsync(Timeout);
+        await collectionChanges.Task.WaitAsync(Timeout);
         using (Assert.EnterMultipleScope()) {
             Assert.That(mutations, Is.EqualTo(new[] { context, context }));
             Assert.That(notifications, Is.EqualTo(new SynchronizationContext[] { null, null }));
@@ -52,21 +111,24 @@ public sealed class SynchronizationTests {
                 var uiThread = Environment.CurrentManagedThreadId;
                 IOperator @operator = new Operator(context);
                 var release = NewSignal();
+                var collectionChanges = NewSignal();
                 var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
                 Operation root = null;
                 void Subscribe(OperationBase parent) {
                     ((INotifyCollectionChanged)parent.ChildSource).CollectionChanged += (_, e) => {
                         var child = (OperationBase)e.NewItems[0];
                         mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
+                        if (mutations.Count == 6) {
+                            collectionChanges.TrySetResult(true);
+                        }
                         Subscribe(child);
                     };
                 }
                 var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
                 NotifyCollectionChangedEventHandler changed = (_, e) => {
                     mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
-                    if (e.Action == NotifyCollectionChangedAction.Add) {
-                        root = (Operation)e.NewItems[0];
-                        Subscribe(root);
+                    if (mutations.Count == 6) {
+                        collectionChanges.TrySetResult(true);
                     }
                 };
                 source.CollectionChanged += changed;
@@ -82,9 +144,12 @@ public sealed class SynchronizationTests {
                             })).ConfigureAwait(false);
                     };
                     @operator.Operate("root", task);
+                    root = (Operation)@operator.Operations.Snapshot().Single();
+                    Subscribe(root);
                     Assert.That(root, Is.Not.Null);
                     release.SetResult(true);
                     await root.Completion.WaitAsync(Timeout);
+                    await collectionChanges.Task.WaitAsync(Timeout);
                     using (Assert.EnterMultipleScope()) {
                         Assert.That(mutations.Select(item => item.Depth).OrderBy(depth => depth), Is.EqualTo(new[] { 0, 0, 1, 1, 2, 2 }));
                         Assert.That(mutations.Where(item => item.Depth == 0)
@@ -114,13 +179,25 @@ public sealed class SynchronizationTests {
             var uiThread = Environment.CurrentManagedThreadId;
             @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")));
             var root = (Operation)@operator.Operations.Snapshot().Single();
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
+            var rootAdded = NewSignal();
+            NotifyCollectionChangedEventHandler added = (_, e) => {
+                if (e.Action == NotifyCollectionChangedAction.Add) {
+                    rootAdded.TrySetResult(true);
+                }
+            };
+            source.CollectionChanged += added;
+            await rootAdded.Task.WaitAsync(Timeout);
+            source.CollectionChanged -= added;
+            var collectionChanged = NewSignal();
             SynchronizationContext mutationContext = null;
             var mutationThread = 0;
             var count = 0;
-            ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, _) => {
+            source.CollectionChanged += (_, _) => {
                 mutationContext = SynchronizationContext.Current;
                 mutationThread = Environment.CurrentManagedThreadId;
                 count++;
+                collectionChanged.TrySetResult(true);
             };
             var workerThread = 0;
             var removed = await Task.Run(() => {
@@ -132,6 +209,7 @@ public sealed class SynchronizationTests {
                     default: return @operator.Operations.RemoveComplete();
                 }
             }).WaitAsync(Timeout);
+            await collectionChanged.Task.WaitAsync(Timeout);
             using (Assert.EnterMultipleScope()) {
                 Assert.That(removed, Is.EqualTo(1));
                 Assert.That(count, Is.EqualTo(1));

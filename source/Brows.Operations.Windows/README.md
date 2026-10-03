@@ -43,6 +43,15 @@ Set `OperationErrorTemplate` to customize how an operation's exception is displa
 
 Leaving `OperationErrorTemplate` unset or setting it to null uses the default message display.
 
-The built-in Cancel and Remove commands capture their creating WPF dispatcher. `CanExecuteChanged` notifications run immediately when raised on that dispatcher; notifications raised on workers are queued asynchronously to it so bound buttons update safely. Core operation property-change notifications remain on the thread updating state.
+The built-in Cancel and Remove commands capture their creating WPF dispatcher. `CanExecuteChanged`
+notifications run immediately when raised on that dispatcher; notifications raised on workers are
+queued asynchronously to it. The operator posts root and child collection changes asynchronously
+to the context captured when it was created. Create the operator on the WPF dispatcher or pass its
+context explicitly to `IOperatorFactory.Create(SynchronizationContext)`.
 
-The project targets `net8.0-windows` and `net10.0-windows` and requires WPF. Access the control and call `Operate` on the WPF dispatcher thread with its default `synchronizeWithCurrentContext: true`. Each call then captures the dispatcher synchronization context for root and child observable collection changes, including removals requested from workers. Mutations dispatch synchronously, so keep the dispatcher responsive and await worker tasks. Passing `synchronizeWithCurrentContext: false` disables collection dispatch for that root and its descendants; use it with UI binding only if you provide the required collection synchronization yourself. The option does not change delegate execution or normal `await` context capture. Operator creation does not capture a context. Progress reports and child registration may run on worker threads; property-change notifications are not dispatched by the library. Serialize state updates across the operation tree. See the [repository](https://github.com/brows-app/brows-operations) for the sample project and usage guidance.
+You can call `Operate`, report progress, and register children from worker threads. The operation
+tree synchronizes state updates, while property-change notifications run on the updating thread;
+WPF bindings marshal bound property updates to the dispatcher. Direct event subscribers run on the
+updating thread. Creating the operator does not change delegate execution or normal `await` context
+capture. The project targets `net8.0-windows` and `net10.0-windows` and requires WPF. See the
+[repository](https://github.com/brows-app/brows-operations) for the sample project and usage guidance.

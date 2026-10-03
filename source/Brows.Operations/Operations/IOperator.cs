@@ -1,10 +1,11 @@
-namespace Brows.Operations;
+﻿namespace Brows.Operations;
 
 /// <summary>Starts and tracks asynchronous work as a hierarchy of operations.</summary>
 /// <remarks>
 /// The operator captures a synchronization context when it is created and uses it for observable
-/// collection changes in every operation and descendant. Progress reports and property-change
-/// notifications may run on other threads.
+/// collection changes in every operation and descendant. Progress reports, child registration,
+/// and property-change notifications may run on other threads. WPF bindings marshal property
+/// updates to their dispatcher.
 /// </remarks>
 public interface IOperator {
     /// <summary>Gets the collection of tracked root operations.</summary>
@@ -19,10 +20,10 @@ public interface IOperator {
     /// </exception>
     /// <remarks>
     /// The delegate starts immediately and may finish synchronously. This method does not await
-    /// completion. Collection changes are delivered asynchronously on the context captured when
-    /// this operator was created. Progress state changes take effect on the calling thread; WPF
-    /// bindings marshal property updates to their dispatcher. This method does not change the
-    /// delegate's execution context or normal await context capture.
+    /// completion. Root collection changes are posted asynchronously to the context captured when
+    /// this operator was created. Progress state changes are synchronized by the operation tree,
+    /// though property-change notifications run on the thread making each update. This method does
+    /// not change the delegate's execution context or normal await context capture.
     /// Delegate errors are recorded on the operation, whose lifetime includes all
     /// registered descendants. Requested cancellation is treated as completion without an error
     /// unless the delegate or a descendant records another failure.

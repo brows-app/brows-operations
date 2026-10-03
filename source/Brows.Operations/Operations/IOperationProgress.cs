@@ -8,8 +8,11 @@ namespace Brows.Operations;
 /// <remarks>
 /// Progress reports and child registration may run from any thread. Operation state changes are
 /// synchronized across the tree. Observable collection changes are posted asynchronously to the
-/// context captured when the operator was created. Property-change notifications run on the thread
-/// updating state; WPF bindings marshal bound property updates to their dispatcher.
+/// context captured when the operator was created. Without a captured context, the producer that
+/// starts a serialized queue drain projects changes synchronously. A concurrent or reentrant update
+/// can return before its queued projection, whose event runs on the active drainer thread.
+/// Property-change notifications run on the thread updating state; WPF bindings marshal bound
+/// property updates to their dispatcher.
 /// State is committed before notifications, and subscribers run after state locks have been released.
 /// Reentrant reports append their notifications to the current thread's notification batch.
 /// Register children before the operation's delegate returns; the operation waits for all registered descendants.
@@ -50,11 +53,12 @@ public interface IOperationProgress {
     /// <exception cref="OperationCanceledException">Cancellation has already been requested for the parent.</exception>
     /// <remarks>
     /// Registration takes effect immediately in the operation tree. The child delegate starts
-    /// synchronously through its first asynchronous wait on the calling thread; its observable
-    /// collection addition is posted asynchronously to the context captured by the operator. With
-    /// no captured context, the collection addition runs on the calling thread. Ordinary failures
-    /// are recorded on the child and contribute to the parent's error state, but do not fault the
-    /// returned task.
+    /// synchronously through its first asynchronous wait on the calling thread. With a captured
+    /// context, its observable collection addition is posted asynchronously to that context. Without
+    /// one, the producer that starts a serialized queue drain projects the addition synchronously. A
+    /// concurrent or reentrant call can return before its queued addition is projected; that event runs
+    /// on the active drainer thread. Ordinary failures are recorded on the child and contribute to the
+    /// parent's error state, but do not fault the returned task.
     /// Successful awaiting indicates completion, rather than successful work. Registration failures
     /// and unexpected completion-task failures propagate through the returned task.
     /// </remarks>

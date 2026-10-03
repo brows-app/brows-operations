@@ -9,7 +9,9 @@ namespace Brows.Operations;
 /// <remarks>
 /// Progress reporting and child registration may continue on worker threads, including after
 /// ConfigureAwait(false). The operator posts observable collection changes to the context captured
-/// when it was created. Property-change notifications run on the thread updating state; WPF bindings
+/// when it was created. Without a captured context, a producer that starts a serialized queue drain
+/// projects changes synchronously; concurrent or reentrant producers can return before their queued
+/// change is projected. Property-change notifications run on the thread updating state; WPF bindings
 /// marshal bound property updates to their dispatcher. Operation state updates are synchronized
 /// across the tree. Honor cancellation cooperatively. The operation records delegate failures and
 /// waits for registered descendants even when this delegate fails or is canceled.

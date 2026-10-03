@@ -50,9 +50,11 @@ Successful root operations are removed from the collection when they finish. Fai
 
 `IOperatorFactory.Create()` captures `SynchronizationContext.Current` when the operator is created.
 For WPF binding, create the operator on the dispatcher thread or pass the dispatcher context to
-`Create(SynchronizationContext)`. Root and child membership changes take effect immediately, while
-their observable collection events are posted asynchronously to the captured context. When no
-context was captured, collection changes run on the thread making each update.
+`Create(SynchronizationContext)`. Root and child membership changes take effect immediately.
+Observable collection changes are posted asynchronously to the captured context. With no context, the
+producer that starts a queue drain projects changes synchronously. If a concurrent or reentrant update
+queues a change while a drain is active, its API can return before that projection; the event then runs
+on the active drainer thread.
 
 You can call `Operate`, report progress, and register children from worker threads. The operation tree
 synchronizes its state updates. Property-change notifications run on the thread making each update;

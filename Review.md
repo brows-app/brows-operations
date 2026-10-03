@@ -230,4 +230,32 @@ and finish without a lock cycle.
   listener exception propagation, collection scheduling after exceptions, and committed finalization state.
 - Composition test assemblies contain no discoverable tests. No public API members were added.
 
-Issue 19 is resolved in `F:/dev/me/agent-brows-operations-19`. Issues 18 and 20 remain open.
+Issue 19 is resolved in `F:/dev/me/agent-brows-operations-19`. Issue 18 remains open; issue 20 is resolved below.
+
+### 20. Resolved — The no-context observable notification contract does not match concurrent execution
+
+**Original finding:** `IOperationCollection` and `IOperationProgress` promised that observable collection
+changes without a captured synchronization context ran on the calling thread. `CollectionChangeQueue`
+serializes its projection through one active drain. If another producer enqueues during that drain, its
+core membership update is immediate and its API can return before the observable source changes; the
+active producer later raises that event on its own thread. Captured-context delivery remains owned by
+that context.
+
+**Resolution:** Public XML and README guidance now distinguishes immediate core membership from the
+serialized observable projection. It documents synchronous draining by the producer that starts a
+no-context drain, delayed projection for concurrent or reentrant enqueue operations, and event delivery
+on the active drainer thread. The synchronous child-delegate prefix guarantee and updater-thread scalar
+property notifications remain documented separately. No production behavior or public API changed.
+
+**Verification:** `Operate_WithoutContext_OverlappingProducersSerializeCollectionProjection` uses two
+dedicated producers and explicit signals. It holds the first Add handler while the second `Operate`
+returns, then checks that both roots are in the core snapshot while only the first is projected. After
+the hold is released, the second Add arrives on the first producer's thread and follows the first Add in
+FIFO order. The previous sequential-only test was renamed to identify its narrower scope. Since issue 20
+is a documentation mismatch, the focused test asserts the existing queue behavior; it is not expected
+to fail against the unchanged implementation. The original focused reproduction showed caller thread 8
+and notification thread 9 for the overlapping producer.
+
+**Validation:** The focused regression passed 1/1 on each of `net462`, `net48`, `net8.0`, and `net10.0`.
+The full core test project passed 102/102 on each target framework. The core Release build succeeded on
+all four frameworks with zero warnings and zero errors. `git diff --check` passed.

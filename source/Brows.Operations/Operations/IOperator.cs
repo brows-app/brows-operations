@@ -20,8 +20,11 @@ public interface IOperator {
     /// </exception>
     /// <remarks>
     /// The delegate starts immediately and may finish synchronously. This method does not await
-    /// completion. Root collection changes are posted asynchronously to the context captured when
-    /// this operator was created. Progress state changes are synchronized by the operation tree,
+    /// completion. Root membership changes immediately. With a captured context, observable root
+    /// changes are posted asynchronously to that context. Without one, the producer that starts a
+    /// serialized queue drain projects changes synchronously; concurrent or reentrant producers can
+    /// return before their queued change is projected. See <see cref="IOperationCollection"/> for
+    /// observable-delivery details. Progress state changes are synchronized by the operation tree,
     /// though property-change notifications run on the thread making each update. This method does
     /// not change the delegate's execution context or normal await context capture.
     /// Delegate errors are recorded on the operation, whose lifetime includes all

@@ -249,10 +249,14 @@ public sealed class SynchronizationTests {
         }
     });
 
-    /// <summary>Verifies an absent context permits synchronous collection changes and worker child registration.</summary>
-    /// <returns>A task representing execution of the test.</returns>
+    /// <summary>
+    /// Verifies sequential no-context collection projection drains synchronously and worker child registration works.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
     [Test]
-    public Task Operate_WithoutContext_MutatesCollectionsOnCallingThread() => Task.Run(async () => {
+    public Task Operate_WithoutContext_SequentialCollectionChangesDrainSynchronously() => Task.Run(async () => {
         Assert.That(SynchronizationContext.Current, Is.Null);
         IOperator @operator = new Operator();
         var release = NewSignal();
@@ -283,4 +287,129 @@ public sealed class SynchronizationTests {
             Assert.That(@operator.Operations.Count, Is.Zero);
         }
     });
+
+    /// <summary>
+    /// Verifies concurrent no-context producers queue projection on the active drainer thread.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [Test]
+    public async Task Operate_WithoutContext_OverlappingProducersSerializeCollectionProjection() {
+        var @operator = await Task.Run(() => {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try {
+                return (IOperator)new Operator();
+            }
+            finally {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        }).WaitAsync(Timeout);
+        var collection = (OperationCollection)@operator.Operations;
+        var finish = NewSignal();
+        var firstEventEntered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstEvent = NewSignal();
+        var secondEventDelivered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstProducerReturned = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondProducerReturned =
+            new TaskCompletionSource<(int Thread, string[] CoreNames, string[] ObservableNames)>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+        var changes = new ConcurrentQueue<(NotifyCollectionChangedAction Action, string Name, int Thread)>();
+        var source = (INotifyCollectionChanged)collection.Source;
+        source.CollectionChanged += (_, e) => {
+            var item = (Operation)(e.NewItems ?? e.OldItems)[0];
+            var thread = Environment.CurrentManagedThreadId;
+            changes.Enqueue((e.Action, item.Name, thread));
+            if (e.Action == NotifyCollectionChangedAction.Add && item.Name == "first") {
+                firstEventEntered.TrySetResult(thread);
+                releaseFirstEvent.Task.GetAwaiter().GetResult();
+            }
+            if (e.Action == NotifyCollectionChangedAction.Add && item.Name == "second") {
+                secondEventDelivered.TrySetResult(thread);
+            }
+        };
+        var firstProducer = new Thread(() => {
+            SynchronizationContext.SetSynchronizationContext(null);
+            var thread = Environment.CurrentManagedThreadId;
+            try {
+                @operator.Operate("first", async (_, _) => await finish.Task.ConfigureAwait(false));
+                firstProducerReturned.TrySetResult(thread);
+            }
+            catch (Exception exception) {
+                firstProducerReturned.TrySetException(exception);
+            }
+        }) {
+            IsBackground = true,
+            Name = "First collection producer"
+        };
+        var secondProducer = new Thread(() => {
+            SynchronizationContext.SetSynchronizationContext(null);
+            var thread = Environment.CurrentManagedThreadId;
+            try {
+                @operator.Operate("second", async (_, _) => await finish.Task.ConfigureAwait(false));
+                var coreNames = @operator.Operations.Snapshot()
+                    .Select(operation => ((Operation)operation).Name)
+                    .ToArray();
+                var observableNames = ((IEnumerable)collection.Source).Cast<Operation>()
+                    .Select(operation => operation.Name)
+                    .ToArray();
+                secondProducerReturned.TrySetResult((thread, coreNames, observableNames));
+            }
+            catch (Exception exception) {
+                secondProducerReturned.TrySetException(exception);
+            }
+        }) {
+            IsBackground = true,
+            Name = "Second collection producer"
+        };
+
+        try {
+            firstProducer.Start();
+            var drainerThread = await firstEventEntered.Task.WaitAsync(Timeout);
+            secondProducer.Start();
+            var secondResult = await secondProducerReturned.Task.WaitAsync(Timeout);
+            var changesBeforeRelease = changes.ToArray();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(secondResult.Thread, Is.Not.EqualTo(drainerThread));
+                Assert.That(secondResult.CoreNames, Is.EquivalentTo(new[] { "first", "second" }));
+                Assert.That(secondResult.ObservableNames, Is.EqualTo(new[] { "first" }));
+                Assert.That(changesBeforeRelease.Select(change => change.Name), Is.EqualTo(new[] { "first" }));
+            }
+
+            releaseFirstEvent.TrySetResult(true);
+            var secondEventThread = await secondEventDelivered.Task.WaitAsync(Timeout);
+            var firstReturnThread = await firstProducerReturned.Task.WaitAsync(Timeout);
+            var additions = changes.Where(change => change.Action == NotifyCollectionChangedAction.Add).ToArray();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(firstReturnThread, Is.EqualTo(drainerThread));
+                Assert.That(additions.Select(change => change.Name), Is.EqualTo(new[] { "first", "second" }));
+                Assert.That(additions.All(change => change.Thread == drainerThread), Is.True);
+                Assert.That(secondEventThread, Is.EqualTo(drainerThread));
+                Assert.That(secondEventThread, Is.Not.EqualTo(secondResult.Thread));
+            }
+
+            var completions = @operator.Operations.Snapshot()
+                .Select(operation => ((Operation)operation).Completion)
+                .ToArray();
+            finish.TrySetResult(true);
+            await Task.WhenAll(completions).WaitAsync(Timeout);
+        }
+        finally {
+            releaseFirstEvent.TrySetResult(true);
+            finish.TrySetResult(true);
+            if (firstProducer.IsAlive) {
+                Assert.That(
+                    firstProducer.Join(Timeout),
+                    Is.True,
+                    "The first producer should exit within the timeout.");
+            }
+            if (secondProducer.IsAlive) {
+                Assert.That(
+                    secondProducer.Join(Timeout),
+                    Is.True,
+                    "The second producer should exit within the timeout.");
+            }
+        }
+    }
 }

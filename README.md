@@ -70,7 +70,7 @@ operations.Operate("Hash files", (progress, token) => Task.Run(() => {
 - When no context is current at creation, such as in a console app or service, changes run on the calling thread under a single operator lock. Notifications are raised while that lock is held, so handlers should not block on other threads that use the operator.
 
 `OperatorControl` requires an operator created on its dispatcher thread and throws `InvalidOperationException` otherwise.
-The WPF control's Cancel and Remove commands deliver `CanExecuteChanged` on their creating dispatcher. Worker notifications are queued asynchronously; notifications already on the dispatcher are delivered immediately.
+Because operation state changes on the operator's context, the WPF control's Cancel and Remove commands raise `CanExecuteChanged` on its dispatcher, even when progress is reported or cancellation is requested from another thread.
 
 After the first progress or target update, an operation becomes relevant if it is still running about one second later. Errors become relevant immediately. Report a change when work begins so long-running tasks become visible.
 

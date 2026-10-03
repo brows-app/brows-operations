@@ -43,6 +43,6 @@ Set `OperationErrorTemplate` to customize how an operation's exception is displa
 
 Leaving `OperationErrorTemplate` unset or setting it to null uses the default message display.
 
-The built-in Cancel and Remove commands capture their creating WPF dispatcher. `CanExecuteChanged` notifications run immediately when raised on that dispatcher; notifications raised on workers are queued asynchronously to it so bound buttons update safely.
+The built-in Cancel and Remove commands raise `CanExecuteChanged` on the control's dispatcher, because operation state changes run there. As a safeguard, a notification raised on any other thread is queued asynchronously to the dispatcher that created the command.
 
 The project targets `net8.0-windows` and `net10.0-windows` and requires WPF. Create the operator on the control's dispatcher thread, for example by calling `IOperatorFactory.Create()` there; setting an operator created on another thread or without a synchronization context throws `InvalidOperationException`. Operation state, notifications, and collection changes then run on the dispatcher, while work can start operations and report progress from any thread. See the [repository](https://github.com/brows-app/brows-operations#threading) for the threading contract, the sample project, and usage guidance.

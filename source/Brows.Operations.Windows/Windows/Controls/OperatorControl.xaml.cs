@@ -12,9 +12,8 @@ namespace Brows.Windows.Controls;
 /// Create the operator on the control's dispatcher thread, such as by calling <c>IOperatorFactory.Create</c>
 /// there, so operation state and collection changes run on that dispatcher. Setting an operator created
 /// elsewhere throws <see cref="InvalidOperationException"/>. Operations can be started and report progress
-/// from any thread.
-/// Built-in Cancel and Remove commands deliver CanExecuteChanged on their creating dispatcher;
-/// changes raised on workers are queued asynchronously to that dispatcher.
+/// from any thread. Because operation state changes on the dispatcher, the built-in Cancel and
+/// Remove commands raise CanExecuteChanged there as well.
 /// </remarks>
 sealed partial class OperatorControl {
     static OperatorControl() {

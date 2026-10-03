@@ -5,9 +5,9 @@ namespace Brows.Operations;
 /// <summary>Provides access to the root operations tracked by an operator.</summary>
 /// <remarks>
 /// By default, root additions and removals use the synchronization context captured by each root's
-/// Operate call. With synchronizeWithCurrentContext set to false or no context available, mutations
-/// run on the thread making each change. Property-change notifications
-/// are not dispatched. <see cref="Snapshot"/> can be enumerated while roots are added or removed.
+/// operator's creation. Collection changes are delivered asynchronously. Property-change
+/// notifications run on the thread updating state. <see cref="Snapshot"/> can be enumerated while
+/// roots are added or removed.
 /// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>

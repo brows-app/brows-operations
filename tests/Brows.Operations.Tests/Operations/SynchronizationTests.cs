@@ -43,19 +43,14 @@ public sealed class SynchronizationTests {
         }
     });
 
-    /// <summary>Verifies that each Operate call applies its context option to descendants.</summary>
-    /// <param name="synchronize">The context option, or null to use the default.</param>
+    /// <summary>Verifies root and descendant collection changes use the context captured at creation.</summary>
     /// <returns>A task representing execution of the test.</returns>
-    [TestCase(null)]
-    [TestCase(true)]
-    [TestCase(false)]
-    public async Task Operate_AppliesContextOptionPerCallAndPassesItToDescendants(bool? synchronize) {
-        IOperator @operator = new Operator();
-        for (var run = 0; run < 2; run++) {
-            var synchronizeThisCall = run == 0 ? synchronize : synchronize == false;
-            await UiTestThread.Run(async () => {
+    [Test]
+    public Task Operate_UsesContextCapturedAtCreationForDescendantCollections() =>
+        UiTestThread.Run(async () => {
                 var context = SynchronizationContext.Current;
                 var uiThread = Environment.CurrentManagedThreadId;
+                IOperator @operator = new Operator(context);
                 var release = NewSignal();
                 var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
                 Operation root = null;
@@ -86,12 +81,7 @@ public sealed class SynchronizationTests {
                                 }, CancellationToken.None).ConfigureAwait(false);
                             })).ConfigureAwait(false);
                     };
-                    if (synchronizeThisCall.HasValue) {
-                        @operator.Operate("root", task, synchronizeWithCurrentContext: synchronizeThisCall.Value);
-                    }
-                    else {
-                        @operator.Operate("root", task);
-                    }
+                    @operator.Operate("root", task);
                     Assert.That(root, Is.Not.Null);
                     release.SetResult(true);
                     await root.Completion.WaitAsync(Timeout);
@@ -100,9 +90,7 @@ public sealed class SynchronizationTests {
                         Assert.That(mutations.Where(item => item.Depth == 0)
                             .All(item => item.Context == context && item.Thread == uiThread), Is.True);
                         Assert.That(mutations.Where(item => item.Depth > 0)
-                            .All(item => synchronizeThisCall == false
-                                ? item.Context is null && item.Thread != uiThread
-                                : item.Context == context && item.Thread == uiThread), Is.True);
+                            .All(item => item.Context == context && item.Thread == uiThread), Is.True);
                         Assert.That(@operator.Operations.Count, Is.Zero);
                     }
                 }
@@ -110,29 +98,21 @@ public sealed class SynchronizationTests {
                     release.TrySetResult(true);
                     source.CollectionChanged -= changed;
                 }
-            });
-        }
-    }
+        });
 
-    /// <summary>Verifies all public and command removal paths honor the operation's context option.</summary>
+    /// <summary>Verifies all public and command removal paths use the operation's captured context.</summary>
     /// <param name="removal">The removal API to exercise.</param>
-    /// <param name="synchronize">Whether to dispatch collection changes to the captured context.</param>
     /// <returns>A task representing execution of the test.</returns>
-    [TestCase("collection", true)]
-    [TestCase("collection", false)]
-    [TestCase("command", true)]
-    [TestCase("command", false)]
-    [TestCase("all", true)]
-    [TestCase("all", false)]
-    [TestCase("errors", true)]
-    [TestCase("errors", false)]
-    public Task WorkerRemoval_HonorsContextOption(string removal, bool synchronize) =>
+    [TestCase("collection")]
+    [TestCase("command")]
+    [TestCase("all")]
+    [TestCase("errors")]
+    public Task WorkerRemoval_UsesCapturedContext(string removal) =>
         UiTestThread.Run(async () => {
             IOperator @operator = new Operator();
             var context = SynchronizationContext.Current;
             var uiThread = Environment.CurrentManagedThreadId;
-            @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")),
-                synchronizeWithCurrentContext: synchronize);
+            @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")));
             var root = (Operation)@operator.Operations.Snapshot().Single();
             SynchronizationContext mutationContext = null;
             var mutationThread = 0;
@@ -155,8 +135,8 @@ public sealed class SynchronizationTests {
             using (Assert.EnterMultipleScope()) {
                 Assert.That(removed, Is.EqualTo(1));
                 Assert.That(count, Is.EqualTo(1));
-                Assert.That(mutationContext, Is.SameAs(synchronize ? context : null));
-                Assert.That(mutationThread, Is.EqualTo(synchronize ? uiThread : workerThread));
+                Assert.That(mutationContext, Is.SameAs(context));
+                Assert.That(mutationThread, Is.EqualTo(uiThread));
                 Assert.That(@operator.Operations.Count, Is.Zero);
             }
         });

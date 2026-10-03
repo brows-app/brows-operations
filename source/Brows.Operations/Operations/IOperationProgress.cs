@@ -6,11 +6,10 @@ namespace Brows.Operations;
 
 /// <summary>Reports operation state and starts child operations.</summary>
 /// <remarks>
-/// Progress reports and child registration may run outside the synchronization context captured
-/// by Operate. Only observable collection changes are dispatched to that context; property-change
-/// notifications run on the thread updating state. Serialize state updates across the operation tree.
-/// When Operate disables context capture with synchronizeWithCurrentContext set to false, or no
-/// context is available, observable collection changes also run on the thread making each change.
+/// Progress reports and child registration may run from any thread. The operator dispatches
+/// observable collection changes to the context captured when it was created. Property-change
+/// notifications run on the thread updating state; WPF bindings marshal property updates to their
+/// dispatcher. The operation tree synchronizes its state updates.
 /// Register children before the operation's delegate returns; the operation waits for all registered descendants.
 /// </remarks>
 public interface IOperationProgress {

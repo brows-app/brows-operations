@@ -74,8 +74,9 @@ internal class OperationBase : Notifier, IOperation {
         });
     }
 
-    private void CancelTokenSource(CancellationTokenSource tokenSource,
-                                  IEnumerable<CancellationTokenSource> leasedTokenSources = null) {
+    private void CancelTokenSource(
+        CancellationTokenSource tokenSource,
+        IEnumerable<(OperationBase Owner, CancellationTokenSource TokenSource)> leasedTokenSources = null) {
         try {
             tokenSource?.Cancel();
         }
@@ -90,8 +91,8 @@ internal class OperationBase : Notifier, IOperation {
                 }
             }
             else {
-                foreach (var leasedTokenSource in leasedTokenSources) {
-                    ReleaseTokenSourceCancellation(leasedTokenSource);
+                foreach (var lease in leasedTokenSources) {
+                    lease.Owner.ReleaseTokenSourceCancellation(lease.TokenSource);
                 }
             }
         }
@@ -406,7 +407,7 @@ internal class OperationBase : Notifier, IOperation {
 
     protected void Cancel() {
         CancellationTokenSource tokenSource = null;
-        var leasedTokenSources = new List<CancellationTokenSource>();
+        var leasedTokenSources = new List<(OperationBase Owner, CancellationTokenSource TokenSource)>();
         Synchronization.Update(() => {
             if (CancellationRequested) {
                 return;
@@ -427,7 +428,7 @@ internal class OperationBase : Notifier, IOperation {
                 op.Canceling = true;
                 if (op.TokenSource is not null) {
                     op.TokenSourceCancellationCount++;
-                    leasedTokenSources.Add(op.TokenSource);
+                    leasedTokenSources.Add((op, op.TokenSource));
                 }
                 foreach (var child in op.ChildCollection.ToArray()) {
                     cancel(child);

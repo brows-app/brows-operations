@@ -113,7 +113,8 @@ keyword in properties when a separate backing field is not otherwise necessary.
 For ordinary comments, prefer `/* ... */` block comments,
 with `*` at the start of each interior line, as shown in `MyPrivateMethod`.
 Use `//` comments only when a single line needs clarification. Public API XML
-documentation is an exception: use `///` documentation comments. Use this
+documentation is an exception: use `///` documentation comments. Put each XML
+element's opening tag, value, and closing tag on separate lines. Use this
 formatting example:
 
 ```csharp
@@ -148,12 +149,24 @@ internal sealed class MyNewClass {
     internal void MyInternalMethod() {
     }
 
+    /// <summary>
+    /// Gets the string supplied when this instance was created.
+    /// </summary>
     public string MyPublicString { get; }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MyNewClass"/> class.
+    /// </summary>
+    /// <param name="myPublicString">
+    /// The string to expose through <see cref="MyPublicString"/>.
+    /// </param>
     public MyNewClass(string myPublicString) {
         MyPublicString = myPublicString ?? throw new ArgumentNullException(nameof(myPublicString));
     }
 
+    /// <summary>
+    /// Performs the public operation.
+    /// </summary>
     public void MyPublicMethod() {
     }
 }

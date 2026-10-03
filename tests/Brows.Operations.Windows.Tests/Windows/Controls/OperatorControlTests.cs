@@ -24,7 +24,7 @@ public sealed class OperatorControlTests {
 
     private static Operation Start(IOperator @operator, OperationDelegate task) {
         Operation result = null;
-        var source = (INotifyCollectionChanged)@operator.Operations.Source;
+        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
         NotifyCollectionChangedEventHandler added = (_, e) => {
             if (e.Action == NotifyCollectionChangedAction.Add) result = (Operation)e.NewItems[0];
         };
@@ -65,7 +65,7 @@ public sealed class OperatorControlTests {
         var dispatcher = Dispatcher.CurrentDispatcher;
         var release = Signal();
         var mutationsOnDispatcher = new List<bool>();
-        ((INotifyCollectionChanged)@operator.Operations.Source).CollectionChanged += (_, _) =>
+        ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, _) =>
             mutationsOnDispatcher.Add(dispatcher.CheckAccess());
         var root = Start(@operator, async (progress, _) => {
             await release.Task.ConfigureAwait(false);
@@ -76,7 +76,7 @@ public sealed class OperatorControlTests {
         });
         ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) =>
             mutationsOnDispatcher.Add(dispatcher.CheckAccess());
-        var rootItems = new ItemsControl { ItemsSource = @operator.Operations.Source };
+        var rootItems = new ItemsControl { ItemsSource = ((OperationCollection)@operator.Operations).Source };
         var childItems = new ItemsControl { ItemsSource = (IEnumerable)root.ChildSource };
         Assert.That(rootItems.Items.Count, Is.EqualTo(1));
         Assert.That(childItems.Items.Count, Is.Zero);
@@ -415,7 +415,7 @@ public sealed class OperatorControlTests {
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
         var buttons = Descendants<Button>(control).Where(button => Equals(button.Content, "Remove")).ToArray();
-        Assert.That(buttons.Select(button => button.DataContext), Is.EquivalentTo(@operator.Operations.AsEnumerable()));
+        Assert.That(buttons.Select(button => button.DataContext), Is.EquivalentTo(@operator.Operations.Snapshot()));
     });
 
     /// <summary>Verifies that a parent with only a descendant error retains progress presentation and hides its own error message.</summary>

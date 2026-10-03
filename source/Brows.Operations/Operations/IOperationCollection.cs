@@ -1,5 +1,4 @@
-﻿using System.Collections;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace Brows.Operations;
 
@@ -8,26 +7,15 @@ namespace Brows.Operations;
 /// By default, root additions and removals use the synchronization context captured by each root's
 /// Operate call. With synchronizeWithCurrentContext set to false or no context available, mutations
 /// run on the thread making each change. Property-change notifications
-/// are not dispatched. Enumerate live views on the owning UI context and avoid concurrent mutations.
+/// are not dispatched. <see cref="Snapshot"/> can be enumerated while roots are added or removed.
 /// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>
     int Count { get; }
 
-    /// <summary>Gets the live collection source for enumeration and UI binding.</summary>
-    /// <remarks>
-    /// The built-in implementation provides a read-only observable collection.
-    /// Use <see cref="Remove"/> to remove completed operations.
-    /// </remarks>
-    IEnumerable Source { get; }
-
-    /// <summary>Returns an enumerator over the root operations currently in the collection.</summary>
-    /// <returns>An enumerator over the collection's operations.</returns>
-    IEnumerator<IOperation> GetEnumerator();
-
-    /// <summary>Returns an enumerable view of the root operations.</summary>
-    /// <returns>A live view of the collection, rather than a snapshot.</returns>
-    IEnumerable<IOperation> AsEnumerable();
+    /// <summary>Returns a stable copy of the root operations currently in the collection.</summary>
+    /// <returns>A list whose membership does not change when roots are added or removed.</returns>
+    IReadOnlyList<IOperation> Snapshot();
 
     /// <summary>Attempts to remove a completed root operation from the collection.</summary>
     /// <param name="item">The operation to remove.</param>
@@ -53,8 +41,7 @@ public interface IOperationCollection {
     /// <remarks>
     /// Each removal synchronously dispatches the collection mutation to the operation's captured context.
     /// When context capture was disabled or no context was available, removal runs on the calling thread.
-    /// The selection of completed operations enumerates the live collection on the calling thread;
-    /// avoid concurrent additions or removals during selection.
+    /// Completed operations are selected from a snapshot of the collection.
     /// </remarks>
     int RemoveComplete(bool? withError = null);
 }

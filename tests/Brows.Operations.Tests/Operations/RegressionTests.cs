@@ -19,7 +19,7 @@ public sealed class RegressionTests {
     // Start work through IOperator. Inspect internals only for state the public interfaces do not expose.
     private static Operation Start(IOperator @operator, OperationDelegate task) {
         Operation operation = null;
-        var source = (INotifyCollectionChanged)@operator.Operations.Source;
+        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
         NotifyCollectionChangedEventHandler added = (_, e) => {
             if (e.Action == NotifyCollectionChangedAction.Add) operation = (Operation)e.NewItems[0];
         };
@@ -232,7 +232,9 @@ public sealed class RegressionTests {
             (long Root, long Middle, long Leaf) notificationValues = default;
             root.PropertyChanged += (_, e) => {
                 if (!first || e.PropertyName != (target ? nameof(OperationBase.Target) :
-                                                          nameof(OperationBase.Progress))) return;
+                                                          nameof(OperationBase.Progress))) {
+                    return;
+                }
                 first = false;
                 notificationValues = target
                     ? (root.Target, middleOperation.Target, leafOperation.Target)
@@ -432,7 +434,7 @@ public sealed class RegressionTests {
     public Task CollectionSource_DoesNotPermitMutationOutsideTheOperationCollection() => UiTestThread.Run(() => {
         IOperator @operator = new Operator();
         Start(@operator, (_, _) => Task.FromException(new IOException("failure")));
-        Assert.That(@operator.Operations.Source is not IList list || list.IsReadOnly, Is.True);
+        Assert.That(((OperationCollection)@operator.Operations).Source is not IList list || list.IsReadOnly, Is.True);
         return Task.CompletedTask;
     });
 
@@ -544,7 +546,9 @@ public sealed class RegressionTests {
                 if (e.PropertyName == nameof(OperationBase.Progressing) && !root.Progressing) RequestEarlyRemoval();
             };
         }
-        else RequestEarlyRemoval();
+        else {
+            RequestEarlyRemoval();
+        }
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
         var eligibleAfter = root.CanRemove;

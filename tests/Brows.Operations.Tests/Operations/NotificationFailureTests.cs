@@ -14,7 +14,7 @@ public sealed class NotificationFailureTests {
 
     private static Operation Start(IOperator @operator, OperationDelegate task, Action<Operation> subscribe = null) {
         Operation root = null;
-        var source = (INotifyCollectionChanged)@operator.Operations.Source;
+        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
         NotifyCollectionChangedEventHandler added = (_, e) => {
             if (e.Action == NotifyCollectionChangedAction.Add) {
                 root = (Operation)e.NewItems[0];

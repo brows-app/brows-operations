@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -28,7 +28,7 @@ public sealed class SynchronizationTests {
         var manager = new OperationManager(collection, context);
         var mutations = new List<SynchronizationContext>();
         var notifications = new List<SynchronizationContext>();
-        ((INotifyCollectionChanged)operations.Source).CollectionChanged += (_, _) =>
+        ((INotifyCollectionChanged)((OperationCollection)operations).Source).CollectionChanged += (_, _) =>
             mutations.Add(SynchronizationContext.Current);
         collection.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(IOperationCollection.Count)) {
@@ -66,7 +66,7 @@ public sealed class SynchronizationTests {
                         Subscribe(child);
                     };
                 }
-                var source = (INotifyCollectionChanged)@operator.Operations.Source;
+                var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
                 NotifyCollectionChangedEventHandler changed = (_, e) => {
                     mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
                     if (e.Action == NotifyCollectionChangedAction.Add) {
@@ -133,11 +133,11 @@ public sealed class SynchronizationTests {
             var uiThread = Environment.CurrentManagedThreadId;
             @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")),
                 synchronizeWithCurrentContext: synchronize);
-            var root = (Operation)@operator.Operations.AsEnumerable().Single();
+            var root = (Operation)@operator.Operations.Snapshot().Single();
             SynchronizationContext mutationContext = null;
             var mutationThread = 0;
             var count = 0;
-            ((INotifyCollectionChanged)@operator.Operations.Source).CollectionChanged += (_, _) => {
+            ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, _) => {
                 mutationContext = SynchronizationContext.Current;
                 mutationThread = Environment.CurrentManagedThreadId;
                 count++;
@@ -174,7 +174,7 @@ public sealed class SynchronizationTests {
             workerThread = Environment.CurrentManagedThreadId;
             progress.Change(name: "worker", data: "details", setProgress: 1, setTarget: 2);
         });
-        var root = (Operation)@operator.Operations.AsEnumerable().Single();
+        var root = (Operation)@operator.Operations.Snapshot().Single();
         root.PropertyChanged += (_, e) => {
             if (e.PropertyName is nameof(OperationBase.Name) or nameof(OperationBase.Data) or
                 nameof(OperationBase.Progress) or nameof(OperationBase.Target)) {
@@ -201,7 +201,7 @@ public sealed class SynchronizationTests {
         Operation root = null;
         var registrationThread = 0;
         var rootContexts = new List<SynchronizationContext>();
-        ((INotifyCollectionChanged)@operator.Operations.Source).CollectionChanged += (_, e) => {
+        ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, e) => {
             rootContexts.Add(SynchronizationContext.Current);
             if (e.Action == NotifyCollectionChangedAction.Add) {
                 root = (Operation)e.NewItems[0];

@@ -49,7 +49,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             @operator.Operate("failure", (_, _) => Task.FromException(new IOException("operation failed")));
-            var item = @operator.Operations.AsEnumerable().Single();
+            var item = @operator.Operations.Snapshot().Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(@operator.Operations.Count, Is.EqualTo(1));
@@ -67,7 +67,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var release = NewSignal();
             var removed = NewSignal();
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Remove) {
                     removed.TrySetResult();
@@ -99,7 +99,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var release = NewSignal();
             @operator.Operate("running", async (_, _) => await release.Task);
-            var item = @operator.Operations.AsEnumerable().Single();
+            var item = @operator.Operations.Snapshot().Single();
             try {
                 Assert.That(@operator.Operations.Remove(item), Is.False);
             }
@@ -116,7 +116,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             @operator.Operate("failure", (_, _) => Task.FromException(new IOException("failure")));
-            var item = @operator.Operations.AsEnumerable().Single();
+            var item = @operator.Operations.Snapshot().Single();
             var removed = @operator.Operations.Remove(item);
 
             using (Assert.EnterMultipleScope()) {
@@ -165,9 +165,9 @@ public sealed class OperatorTests {
             @operator.Operate("first failure", (_, _) => Task.FromException(new IOException("first")));
             @operator.Operate("second failure", (_, _) => Task.FromException(new IOException("second")));
             @operator.Operate("running", async (_, _) => await release.Task);
-            var running = @operator.Operations.AsEnumerable().Last();
+            var running = @operator.Operations.Snapshot().Last();
             var runningRemoved = NewSignal();
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Remove && args.OldItems?.Contains(running) == true) {
                     runningRemoved.TrySetResult();
@@ -176,7 +176,7 @@ public sealed class OperatorTests {
             source.CollectionChanged += handler;
             try {
                 var removed = @operator.Operations.RemoveComplete();
-                var remaining = @operator.Operations.AsEnumerable().ToArray();
+                var remaining = @operator.Operations.Snapshot().ToArray();
                 using (Assert.EnterMultipleScope()) {
                     Assert.That(removed, Is.EqualTo(2));
                     Assert.That(remaining, Is.EqualTo(new[] { running }));
@@ -241,7 +241,7 @@ public sealed class OperatorTests {
             try {
                 await Task.WhenAll(failed.Completion, successful.Completion).WaitAsync(TimeSpan.FromSeconds(5));
                 var removed = operations.RemoveComplete(withError);
-                var remaining = operations.AsEnumerable().ToArray();
+                var remaining = operations.Snapshot().ToArray();
                 var expected = withError switch {
                     true => new IOperation[] { successful, running },
                     false => new IOperation[] { failed, running },
@@ -258,25 +258,50 @@ public sealed class OperatorTests {
             await running.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         });
 
-    /// <summary>Verifies that each public enumeration path exposes the same root operations.</summary>
+    /// <summary>Verifies that a snapshot retains its membership after collection changes.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task CollectionEnumerators_ExposeTheSameItemsAsAsEnumerableAndSource() =>
+    public Task CollectionSnapshot_RetainsItemsAfterRemoval() =>
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             @operator.Operate("failure", (_, _) => Task.FromException(new IOException("failure")));
-            var expected = @operator.Operations.AsEnumerable().ToArray();
-            var enumerated = new List<IOperation>();
-            using (var iterator = @operator.Operations.GetEnumerator()) {
-                while (iterator.MoveNext()) {
-                    enumerated.Add(iterator.Current);
-                }
+            var snapshot = @operator.Operations.Snapshot();
+            var item = snapshot.Single();
+            Assert.That(@operator.Operations.Remove(item), Is.True);
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(snapshot, Is.EqualTo(new[] { item }));
+                Assert.That(@operator.Operations.Snapshot(), Is.Empty);
             }
-            var sourceItems = @operator.Operations.Source.Cast<IOperation>();
-
-            Assert.That(enumerated.Concat(sourceItems), Is.EqualTo(expected.Concat(expected)));
             return Task.CompletedTask;
         });
+
+    /// <summary>Verifies that snapshots can be enumerated while another thread changes the roots.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public async Task CollectionSnapshot_ConcurrentMutations_DoNotInvalidateEnumeration() {
+        var collection = new OperationCollection();
+        IOperationCollection operations = collection;
+        var started = NewSignal();
+        var enumerate = NewSignal();
+        var producer = Task.Run(() => {
+            started.SetResult();
+            enumerate.Task.GetAwaiter().GetResult();
+            for (var index = 0; index < 500; index++) {
+                var item = new Operation($"root {index}", (_, _) => Task.CompletedTask);
+                collection.Add(item);
+                item.Start();
+                Assert.That(collection.Remove(item), Is.True);
+            }
+        });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        enumerate.SetResult();
+        do {
+            var snapshot = operations.Snapshot();
+            Assert.That(snapshot.All(item => item is not null), Is.True);
+        } while (!producer.IsCompleted);
+        await producer.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.That(operations.Snapshot(), Is.Empty);
+    }
 
     /// <summary>Verifies that the collection source reflects additions and removals.</summary>
     /// <returns>A task representing execution of the test.</returns>
@@ -285,10 +310,10 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             var changes = new List<NotifyCollectionChangedAction>();
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             source.CollectionChanged += (_, args) => changes.Add(args.Action);
             @operator.Operate("failure", (_, _) => Task.FromException(new IOException("failure")));
-            var item = @operator.Operations.AsEnumerable().Single();
+            var item = @operator.Operations.Snapshot().Single();
             @operator.Operations.Remove(item);
 
             Assert.That(changes, Is.EqualTo(new[] { NotifyCollectionChangedAction.Add, NotifyCollectionChangedAction.Remove }));
@@ -384,7 +409,7 @@ public sealed class OperatorTests {
             var release = NewSignal();
             var startedCount = 0;
             Operation root = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     root = (Operation)args.NewItems[0];
@@ -428,7 +453,7 @@ public sealed class OperatorTests {
                 await progress.Children(new[] { 1 }, _ => new OperationChild(
                     "child", (_, _) => Task.FromException(new IOException("child failed"))));
             });
-            var parent = (OperationBase)@operator.Operations.AsEnumerable().Single();
+            var parent = (OperationBase)@operator.Operations.Snapshot().Single();
             var child = ((IEnumerable)parent.ChildSource).Cast<OperationBase>().Single();
             var wasRelevant = ((OperationCollection)@operator.Operations).Relevant;
             var removed = @operator.Operations.Remove(parent);
@@ -456,7 +481,7 @@ public sealed class OperatorTests {
             var childStarted = NewSignal();
             var release = NewSignal();
             Operation root = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     root = (Operation)args.NewItems[0];
@@ -498,7 +523,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             Operation root = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     root = (Operation)args.NewItems[0];
@@ -543,7 +568,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             Operation root = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     root = (Operation)args.NewItems[0];
@@ -597,7 +622,7 @@ public sealed class OperatorTests {
             var changed = NewSignal();
             var release = NewSignal();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -634,7 +659,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             Operation operation = null;
             var displayValues = new List<(string Progress, string Target)>();
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -664,7 +689,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -692,7 +717,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             Operation operation = null;
             var changedAgain = false;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -726,7 +751,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             var propertyNames = new HashSet<string>();
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     ((INotifyPropertyChanged)args.NewItems[0]).PropertyChanged += (_, change) => propertyNames.Add(change.PropertyName);
@@ -770,7 +795,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             @operator.Operate("parent", async (progress, _) => await progress.Child("invalid", null));
-            var operation = (OperationBase)@operator.Operations.AsEnumerable().Single();
+            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(operation.Error, Is.InstanceOf<ArgumentNullException>());
@@ -786,7 +811,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             @operator.Operate("parent", async (progress, _) =>
                 await progress.Children<int>(null, _ => null));
-            var operation = (OperationBase)@operator.Operations.AsEnumerable().Single();
+            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(operation.Error, Is.InstanceOf<ArgumentNullException>());
@@ -803,7 +828,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             @operator.Operate("parent", async (progress, _) =>
                 await progress.Children(Array.Empty<int>(), null));
-            var operation = (OperationBase)@operator.Operations.AsEnumerable().Single();
+            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(operation.Error, Is.InstanceOf<ArgumentNullException>());
@@ -820,7 +845,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var started = NewSignal<CancellationToken>();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -856,7 +881,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var started = NewSignal();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -888,7 +913,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var started = NewSignal();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -937,7 +962,7 @@ public sealed class OperatorTests {
             var started = NewSignal();
             var savedProgress = default(IOperationProgress);
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -976,7 +1001,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             @operator.Operate("unexpected cancellation", (_, _) =>
                 Task.FromException(new OperationCanceledException("not requested")));
-            var operation = (OperationBase)@operator.Operations.AsEnumerable().Single();
+            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(operation.Error, Is.InstanceOf<OperationCanceledException>());
@@ -994,7 +1019,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var started = NewSignal<CancellationToken>();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -1037,7 +1062,7 @@ public sealed class OperatorTests {
             var parentStarted = NewSignal<CancellationToken>();
             var childStarted = NewSignal<CancellationToken>();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -1078,7 +1103,7 @@ public sealed class OperatorTests {
             var release = NewSignal();
             var becameRelevant = NewSignal();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)@operator.Operations.Source;
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
             NotifyCollectionChangedEventHandler handler = (_, args) => {
                 if (args.Action == NotifyCollectionChangedAction.Add) {
                     operation = (Operation)args.NewItems[0];
@@ -1111,7 +1136,7 @@ public sealed class OperatorTests {
 
     private static Operation CaptureWithChange(IOperator @operator, Action<IOperationProgress> change) {
         Operation operation = null;
-        var source = (INotifyCollectionChanged)@operator.Operations.Source;
+        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
         NotifyCollectionChangedEventHandler handler = (_, args) => {
             if (args.Action == NotifyCollectionChangedAction.Add) {
                 operation = (Operation)args.NewItems[0];

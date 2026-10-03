@@ -33,8 +33,20 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         }
     }
 
+    private IReadOnlyList<IOperation> Snapshot() {
+        lock (Collection) {
+            return [.. Collection];
+        }
+    }
+
     public bool Relevant => Relevance > 0;
-    public int Count => Collection.Count;
+    public int Count {
+        get {
+            lock (Collection) {
+                return Collection.Count;
+            }
+        }
+    }
     public IEnumerable Source => field ??= new ReadOnlyObservableCollection<Operation>(Collection);
 
     public void Add(Operation item) {
@@ -43,7 +55,11 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             Relevance++;
         }
         item.RelevantChanged += Item_RelevantChanged;
-        item.SynchronizeCollectionChange(() => Collection.Add(item));
+        item.SynchronizeCollectionChange(() => {
+            lock (Collection) {
+                Collection.Add(item);
+            }
+        });
         NotifyPropertyChanged(CountEvent);
     }
 
@@ -55,7 +71,11 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             return false;
         }
         var removed = false;
-        item.SynchronizeCollectionChange(() => removed = Collection.Remove(item));
+        item.SynchronizeCollectionChange(() => {
+            lock (Collection) {
+                removed = Collection.Remove(item);
+            }
+        });
         if (removed) {
             if (item.Relevant) {
                 Relevance--;
@@ -66,12 +86,8 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         return removed;
     }
 
-    IEnumerator<IOperation> IOperationCollection.GetEnumerator() {
-        return Collection.GetEnumerator();
-    }
-
-    IEnumerable<IOperation> IOperationCollection.AsEnumerable() {
-        return Collection.AsEnumerable();
+    IReadOnlyList<IOperation> IOperationCollection.Snapshot() {
+        return Snapshot();
     }
 
     bool IOperationCollection.Remove(IOperation item) {
@@ -85,7 +101,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             _ => i => i.Complete
         };
         var itemsRemoved = 0;
-        var itemsToRemove = Collection.Where(predicate).ToList();
+        var itemsToRemove = Snapshot().Where(predicate).ToList();
         foreach (var item in itemsToRemove) {
             if (Remove(item as Operation)) {
                 itemsRemoved++;

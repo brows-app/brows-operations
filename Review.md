@@ -300,4 +300,70 @@ all four frameworks with zero warnings and zero errors. `git diff --check` passe
 - All four new .NET 10 regression cases passed together on the merged branch.
 - Full solution tests passed: 105 core cases and 48 WPF cases per supported target framework,
   612 executions total. Composition test assemblies contain no discoverable tests.
+
+## Documentation accuracy review, October 4, 2026
+
+Reviewed every README and every public XML documentation comment against the merged `dev` branch
+implementation (the `agent/wpf-threading-synchronization` strategy). Traced each documented claim
+(context capture, synchronous vs. posted collection projection, no-context drain ownership,
+notification timing relative to the state gate, `Change` ordering, child-registration lifetime and
+exceptions, relevance delay, `CanCancel`/`CanRemove` dispatch) against the corresponding code in
+`OperationSynchronization.cs`, `CollectionChangeQueue.cs`, `OperationBase.cs`, `OperationCollection.cs`,
+`OperationBaseCollection.cs`, `OperationManager.cs`, `Operator.cs`, `OperatorFactory.cs`, and
+`OperationCommandConverter.cs`. All of it checks out, including the subtle points, except the two
+defects below.
+
+### 21. Resolved — The Windows package README's getting-started XAML snippet uses the wrong CLR namespace
+
+**Location:** [source/Brows.Operations.Windows/README.md](source/Brows.Operations.Windows/README.md), lines 7-12.
+
+The snippet declares:
+
+```xml
+xmlns:operations="clr-namespace:Brows.Operations;assembly=Brows.Operations.Windows"
+```
+
+`OperatorControl` is declared `x:Class="Brows.Windows.Controls.OperatorControl"`
+([OperatorControl.xaml](source/Brows.Operations.Windows/Windows/Controls/OperatorControl.xaml) and
+[OperatorControl.xaml.cs](source/Brows.Operations.Windows/Windows/Controls/OperatorControl.xaml.cs)),
+in namespace `Brows.Windows.Controls`, not `Brows.Operations`. The `Brows.Operations` namespace lives in
+the separate `Brows.Operations.dll`, as the package's own
+[Resources/Styles.xaml](source/Brows.Operations.Windows/Resources/Styles.xaml) correctly shows:
+`xmlns:b.o="clr-namespace:Brows.Operations;assembly=Brows.Operations"` alongside
+`xmlns:bwc="clr-namespace:Brows.Windows.Controls"` for the control itself. The package's own
+`XmlnsDefinition` attributes
+([Properties/AssemblyInfo.cs](source/Brows.Operations.Windows/Properties/AssemblyInfo.cs)) map
+`http://schemas.brows.app/winfx/2026/xaml/presentation` to `Brows.Windows` and `Brows.Windows.Controls`,
+and the sample app uses exactly that schema URI
+([OperationsSampleWindow.xaml](samples/Brows.Operations.Sample/OperationsSampleWindow.xaml)).
+
+A consumer who copies the README snippet as written gets a XAML namespace that does not contain
+`OperatorControl`, so the markup fails to resolve.
+
+**Suggested fix:** change the snippet to either
+`xmlns:operations="clr-namespace:Brows.Windows.Controls;assembly=Brows.Operations.Windows"` or the
+package's custom schema URI, matching the sample app and `Resources/Styles.xaml`.
+
+### 22. Resolved — The Windows package README understates its supported target frameworks
+
+**Location:** [source/Brows.Operations.Windows/README.md](source/Brows.Operations.Windows/README.md), lines 57-58.
+
+The README states: "The project targets `net8.0-windows` and `net10.0-windows` and requires WPF."
+[Brows.Operations.Windows.csproj](source/Brows.Operations.Windows/Brows.Operations.Windows.csproj) declares
+`<TargetFrameworks>net462;net48;net8.0-windows;net10.0-windows</TargetFrameworks>` with `UseWPF=true` for
+all four, and `Brows.Operations.Windows.Tests` runs on all four
+(confirmed locally: 48 passing WPF cases on each of `net462`, `net48`, `net8.0`, `net10.0`). The README
+omits the two .NET Framework targets, understating platform support for anyone deciding whether the
+package fits a .NET Framework WPF application.
+
+**Suggested fix:** update the sentence to list all four target frameworks, e.g. "The project targets
+`net462`, `net48`, `net8.0-windows`, and `net10.0-windows`, and requires WPF."
+
+### Aside — stale "SDK selection" note
+
+The existing "Areas to improve > SDK selection" note above states that `global.json` declares version
+`10.0.0`. The committed `global.json` has declared `10.0.100` since it was first added
+(`git log --all -- global.json` shows only `Add project files.` and `Add AGENTS.md.`; neither set
+`10.0.0`). The note no longer matches the repository and should be treated as stale; no code or README
+change is needed for it.
 - Final staged diff and whitespace checks passed. No implementation or test conflicts occurred.

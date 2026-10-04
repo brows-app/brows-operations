@@ -7,7 +7,7 @@ Assign an operator created through the Composition package to the control's `Ope
 ```xml
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:operations="clr-namespace:Brows.Operations;assembly=Brows.Operations.Windows">
+        xmlns:operations="clr-namespace:Brows.Windows.Controls;assembly=Brows.Operations.Windows">
   <operations:OperatorControl x:Name="OperationView" />
 </Window>
 ```
@@ -54,6 +54,6 @@ tree synchronizes state updates, while property-change notifications run on the 
 WPF bindings marshal bound property updates to the dispatcher. Direct event subscribers run on the
 updating thread after state locks have been released and the update's state has been committed.
 Reentrant reports append notifications to the current thread's batch. Creating the operator does not
-change delegate execution or normal `await` context capture. The project targets `net8.0-windows` and
-`net10.0-windows` and requires WPF. See the
+change delegate execution or normal `await` context capture. The project targets `net462`, `net48`,
+`net8.0-windows`, and `net10.0-windows`, and requires WPF. See the
 [repository](https://github.com/brows-app/brows-operations) for the sample project and usage guidance.

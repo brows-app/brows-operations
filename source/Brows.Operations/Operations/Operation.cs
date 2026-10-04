@@ -1,11 +1,12 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Threading;
 
 namespace Brows.Operations;
 
 internal sealed class Operation : OperationBase {
-    protected sealed override void OnPropertyChanged(PropertyChangedEventArgs e) {
-        base.OnPropertyChanged(e);
+    protected sealed override void PublishPropertyChanged(PropertyChangedEventArgs e) {
+        base.PublishPropertyChanged(e);
         if (e?.PropertyName is nameof(Complete)) {
             CanRemoveChanged?.Invoke(this, EventArgs.Empty);
             NotifyPropertyChanged(nameof(CanRemove));
@@ -31,7 +32,11 @@ internal sealed class Operation : OperationBase {
         Removed?.Invoke(this, EventArgs.Empty);
     }
 
-    public Operation(string name, OperationDelegate task, OperationContext context)
-    : base(name, null, task, context) {
+    public Operation(string name, OperationDelegate task, SynchronizationContext synchronizationContext = null)
+    : this(name, task, new OperationSynchronization(synchronizationContext ?? SynchronizationContext.Current)) {
+    }
+
+    internal Operation(string name, OperationDelegate task, OperationSynchronization synchronization)
+    : base(name, null, task, synchronization) {
     }
 }

@@ -23,15 +23,10 @@ public sealed class OperatorControlTests {
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static Operation Start(IOperator @operator, OperationDelegate task) {
-        Operation result = null;
-        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-        NotifyCollectionChangedEventHandler added = (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) result = (Operation)e.NewItems[0];
-        };
-        source.CollectionChanged += added;
-        try { @operator.Operate("root", task); }
-        finally { source.CollectionChanged -= added; }
-        return result;
+        Operation operation = null;
+        new OperationManager((OperationCollection)@operator.Operations)
+            .Operate("root", task, started => operation = started);
+        return operation;
     }
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject {
@@ -78,10 +73,10 @@ public sealed class OperatorControlTests {
             mutationsOnDispatcher.Add(dispatcher.CheckAccess());
         var rootItems = new ItemsControl { ItemsSource = ((OperationCollection)@operator.Operations).Source };
         var childItems = new ItemsControl { ItemsSource = (IEnumerable)root.ChildSource };
-        Assert.That(rootItems.Items.Count, Is.EqualTo(1));
-        Assert.That(childItems.Items.Count, Is.Zero);
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
+        Assert.That(rootItems.Items.Count, Is.EqualTo(1));
+        Assert.That(childItems.Items.Count, Is.Zero);
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
         await Layout(control);
@@ -289,10 +284,7 @@ public sealed class OperatorControlTests {
         var cancel = name == "Cancel";
         var root = cancel
             ? Start(new Operator(), async (_, _) => await release.Task)
-            : new Operation("worker completion", (_, _) => Task.CompletedTask, new OperationContext(context));
-        if (!cancel) {
-            root.Prepare();
-        }
+            : new Operation("worker completion", (_, _) => Task.CompletedTask);
         var command = Command(root, name);
         var button = new Button();
         BindingOperations.SetBinding(button, Button.CommandProperty, new Binding { Source = command });
@@ -314,7 +306,12 @@ public sealed class OperatorControlTests {
                     root.Cancel();
                 }
                 else {
-                    root.Start();
+                    // Synchronous completion stays on this worker. Route any unexpected
+                    // async-void observer failure to the test dispatcher instead of the process.
+                    var previous = SynchronizationContext.Current;
+                    SynchronizationContext.SetSynchronizationContext(context);
+                    try { root.Start(); }
+                    finally { SynchronizationContext.SetSynchronizationContext(previous); }
                 }
             }).WaitAsync(Timeout);
             if (!cancel) {
@@ -323,7 +320,7 @@ public sealed class OperatorControlTests {
             await delivered.Task.WaitAsync(Timeout);
             using (Assert.EnterMultipleScope()) {
                 Assert.That(notificationsOnDispatcher, Is.EqualTo(new[] { true }));
-                Assert.That(propertyChangesOnDispatcher, Is.EqualTo(new[] { true }));
+                Assert.That(propertyChangesOnDispatcher, Is.EqualTo(new[] { false }));
                 Assert.That(command.CanExecute(null), Is.EqualTo(!cancel));
                 Assert.That(button.IsEnabled, Is.EqualTo(!cancel));
             }
@@ -495,51 +492,6 @@ public sealed class OperatorControlTests {
             Assert.That(before, Is.True);
             Assert.That(after, Is.False);
             Assert.That(finalButton.IsEnabled, Is.True);
-        }
-    });
-
-    /// <summary>Verifies the control rejects operators not affine to its dispatcher.</summary>
-    /// <param name="kind">How the rejected operator is created.</param>
-    /// <returns>A task representing execution of the test.</returns>
-    [TestCase("no context")]
-    [TestCase("other thread")]
-    public Task OperatorWithoutDispatcherAffinity_IsRejected(string kind) => WpfTestThread.Run(async () => {
-        var control = new OperatorControl();
-        var valid = new Operator();
-        control.Operator = valid;
-        var rejected = kind == "no context"
-            ? new Operator(null)
-            : await Task.Run(() => new Operator(new SynchronizationContext())).WaitAsync(Timeout);
-        Assert.Throws<InvalidOperationException>(() => control.Operator = rejected);
-        Assert.That(control.OperationCollection, Is.Null);
-        control.Operator = valid;
-        Assert.That(control.OperationCollection, Is.SameAs(valid.Operations));
-    });
-
-    /// <summary>Verifies subscribers can synchronously invoke the dispatcher during worker reports.</summary>
-    /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public Task WorkerReports_SubscribersInvokingDispatcher_DoNotDeadlock() => WpfTestThread.Run(async () => {
-        IOperator @operator = new Operator();
-        var dispatcher = Dispatcher.CurrentDispatcher;
-        var release = Signal();
-        var onDispatcher = new List<bool>();
-        var root = Start(@operator, async (progress, _) => {
-            await release.Task.ConfigureAwait(false);
-            for (var i = 0; i < 100; i++) {
-                progress.Change(addTarget: 1, addProgress: 1, data: $"item {i}");
-                await Task.Yield();
-            }
-        });
-        root.PropertyChanging += (_, _) => onDispatcher.Add(dispatcher.Invoke(() => root.Progress >= 0));
-        root.PropertyChanged += (_, _) => onDispatcher.Add(dispatcher.Invoke(dispatcher.CheckAccess));
-        release.SetResult();
-        await root.Completion.WaitAsync(Timeout);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(onDispatcher, Is.Not.Empty);
-            Assert.That(onDispatcher.All(value => value), Is.True);
-            Assert.That(root.Progress, Is.EqualTo(100));
-            Assert.That(root.Target, Is.EqualTo(100));
         }
     });
 }

@@ -4,4 +4,17 @@ Core interfaces and operation tracking for asynchronous .NET work. An `IOperator
 
 Progress and target changes from children roll up to the root operation. Failed operations remain in the collection for inspection, while successful roots are removed automatically. The concrete `Operator` implementation is internal; reference Brows.Operations.Composition and resolve `IOperatorFactory` through Brows.Composition to create an operator.
 
-An operator is affine to the synchronization context current when it is created. Operation state changes, property-change notifications, and observable collection changes run on that context. `Operate`, progress reporting, child registration, and cancellation can be called from any thread, including after `ConfigureAwait(false)`; calls from other threads are posted to the context, and worker progress reports are coalesced. Read operation state on the context; `IOperationCollection.Snapshot()` and `Count` are safe from any thread. Without a context, changes run on the calling thread under an operator lock. See the [repository README](https://github.com/brows-app/brows-operations#readme) for the full threading contract, a usage example, and build instructions.
+`IOperatorFactory.Create()` captures the current synchronization context when the operator is created.
+For WPF binding, create the operator on the dispatcher thread or pass its context explicitly to
+`Create(SynchronizationContext)`. Root and child collection changes are posted asynchronously to the
+captured context. With no context, the producer that starts a queue drain projects changes
+synchronously. A concurrent or reentrant update can enqueue while that drain is active, return before
+its observable projection, and have its event delivered on the active drainer thread. Progress reports
+and child registration may run on worker threads, including after `ConfigureAwait(false)`.
+Operation state updates are synchronized by the library. Property-change notifications run on the
+updating thread after state locks have been released. State is committed before notifications, and
+reentrant reports append notifications to the current thread's batch. WPF bindings marshal bound
+property updates to their dispatcher. Use `IOperationCollection.Snapshot()` to enumerate roots while
+other threads add or remove them. See the
+[repository README](https://github.com/brows-app/brows-operations#readme) for a usage example and build
+instructions.

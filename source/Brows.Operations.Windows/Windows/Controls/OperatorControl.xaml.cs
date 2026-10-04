@@ -9,11 +9,12 @@ namespace Brows.Windows.Controls;
 /// <remarks>
 /// Supports the built-in operators created by <c>IOperatorFactory</c>. Relevant operations and
 /// their ancestor paths are displayed with progress, errors, and cancellation or removal commands.
-/// Create the operator on the control's dispatcher thread, such as by calling <c>IOperatorFactory.Create</c>
-/// there, so operation state and collection changes run on that dispatcher. Setting an operator created
-/// elsewhere throws <see cref="InvalidOperationException"/>. Operations can be started and report progress
-/// from any thread. Because operation state changes on the dispatcher, the built-in Cancel and
-/// Remove commands raise CanExecuteChanged there as well.
+/// Create the operator on the WPF dispatcher, or pass its dispatcher context to
+/// <c>IOperatorFactory.Create(SynchronizationContext)</c>. Root and child collection changes are
+/// posted asynchronously to that dispatcher. Operations and progress may be updated on workers;
+/// property-change notifications run on the updating thread and WPF bindings marshal bound values.
+/// Built-in Cancel and Remove commands deliver CanExecuteChanged on their creating dispatcher;
+/// changes raised on workers are queued asynchronously to that dispatcher.
 /// </remarks>
 sealed partial class OperatorControl {
     static OperatorControl() {
@@ -48,16 +49,9 @@ sealed partial class OperatorControl {
             defaultValue: null,
             propertyChangedCallback: (s, e) => {
                 if (s is OperatorControl self) {
-                    var collection = e.NewValue is IOperator @operator
+                    self.OperationCollection = e.NewValue is IOperator @operator
                         ? @operator.Operations as OperationCollection
                         : null;
-                    if (collection is not null && !collection.Context.IsOwnedBy(self.Dispatcher.Thread)) {
-                        self.OperationCollection = null;
-                        throw new InvalidOperationException(
-                            "The operator must be created on this control's dispatcher thread, " +
-                            "while its dispatcher synchronization context is current.");
-                    }
-                    self.OperationCollection = collection;
                 }
             }));
 

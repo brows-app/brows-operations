@@ -112,19 +112,17 @@ sealed partial class OperationsSampleWindow : IExport {
     }
 
     private static async Task ParallelBatch(IOperationProgress progress, CancellationToken token) {
-        progress.Change(data: "Four child operations report from thread-pool workers");
+        progress.Change(data: "Four child operations run concurrently");
         await progress.Children(
             Enumerable.Range(1, 4),
             item => new OperationChild(
                 $"Batch item {item}",
-                (childProgress, childToken) => Task.Run(
-                    () => RunSteps(childProgress,
-                                   childToken,
-                                   name: $"Process item {item}",
-                                   steps: 10,
-                                   delay: TimeSpan.FromMilliseconds(400 + item * 35),
-                                   action: "Processed"),
-                    childToken)));
+                (childProgress, childToken) => RunSteps(childProgress,
+                                                        childToken,
+                                                        name: $"Process item {item}",
+                                                        steps: 10,
+                                                        delay: TimeSpan.FromMilliseconds(400 + item * 35),
+                                                        action: "Processed")));
     }
 
     private static async Task ProgressUpdates(IOperationProgress progress, CancellationToken token) {

@@ -43,6 +43,17 @@ Set `OperationErrorTemplate` to customize how an operation's exception is displa
 
 Leaving `OperationErrorTemplate` unset or setting it to null uses the default message display.
 
-The built-in Cancel and Remove commands raise `CanExecuteChanged` on the control's dispatcher, because operation state changes run there. As a safeguard, a notification raised on any other thread is queued asynchronously to the dispatcher that created the command.
+The built-in Cancel and Remove commands capture their creating WPF dispatcher. `CanExecuteChanged`
+notifications run immediately when raised on that dispatcher; notifications raised on workers are
+queued asynchronously to it. The operator posts root and child collection changes asynchronously
+to the context captured when it was created. Create the operator on the WPF dispatcher or pass its
+context explicitly to `IOperatorFactory.Create(SynchronizationContext)`.
 
-The project targets `net8.0-windows` and `net10.0-windows` and requires WPF. Create the operator on the control's dispatcher thread, for example by calling `IOperatorFactory.Create()` there; setting an operator created on another thread or without a synchronization context throws `InvalidOperationException`. Operation state, notifications, and collection changes then run on the dispatcher, while work can start operations and report progress from any thread. See the [repository](https://github.com/brows-app/brows-operations#threading) for the threading contract, the sample project, and usage guidance.
+You can call `Operate`, report progress, and register children from worker threads. The operation
+tree synchronizes state updates, while property-change notifications run on the updating thread;
+WPF bindings marshal bound property updates to the dispatcher. Direct event subscribers run on the
+updating thread after state locks have been released and the update's state has been committed.
+Reentrant reports append notifications to the current thread's batch. Creating the operator does not
+change delegate execution or normal `await` context capture. The project targets `net8.0-windows` and
+`net10.0-windows` and requires WPF. See the
+[repository](https://github.com/brows-app/brows-operations) for the sample project and usage guidance.

@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,6 +22,56 @@ public sealed class OperatorTests {
 
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static T GetPrivateField<T>(OperationBase operation, string fieldName) =>
+        (T)typeof(OperationBase)
+            .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(operation);
+
+    private static bool IsDisposed(CancellationTokenSource tokenSource) {
+        try {
+            _ = tokenSource.Token;
+            return false;
+        }
+        catch (ObjectDisposedException) {
+            return true;
+        }
+    }
+
+    private static async Task<OperationBase[]> WaitForChildren(OperationBase operation, int count = 1) {
+        var children = (IList)operation.ChildSource;
+        if (children.Count < count) {
+            var changed = NewSignal();
+            NotifyCollectionChangedEventHandler handler = (_, _) => {
+                if (children.Count >= count) {
+                    changed.TrySetResult();
+                }
+            };
+            var source = (INotifyCollectionChanged)children;
+            source.CollectionChanged += handler;
+            try {
+                if (children.Count < count) {
+                    await changed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
+            finally {
+                source.CollectionChanged -= handler;
+            }
+        }
+        return children.Cast<OperationBase>().ToArray();
+    }
+
+    private static Operation Start(IOperator @operator,
+                                   string name,
+                                   OperationDelegate task,
+                                   Action<Operation> initialize = null) {
+        Operation operation = null;
+        new OperationManager((OperationCollection)@operator.Operations).Operate(name, task, root => {
+            operation = root;
+            initialize?.Invoke(root);
+        });
+        return operation;
+    }
 
     /// <summary>Verifies that starting an operation rejects a null work delegate.</summary>
     [Test]
@@ -228,15 +279,15 @@ public sealed class OperatorTests {
             var collection = new OperationCollection();
             IOperationCollection operations = collection;
             var release = NewSignal();
-            var context = collection.Context;
-            var failed = new Operation("failed", (_, _) => Task.FromException(new IOException("failure")), context);
-            var successful = new Operation("successful", (_, _) => Task.CompletedTask, context);
-            var running = new Operation("running", async (_, _) => await release.Task, context);
-            foreach (var item in new[] { failed, successful, running }) {
-                collection.Add(item);
-                item.Prepare();
-                item.Start();
-            }
+            var failed = new Operation("failed", (_, _) => Task.FromException(new IOException("failure")));
+            var successful = new Operation("successful", (_, _) => Task.CompletedTask);
+            var running = new Operation("running", async (_, _) => await release.Task);
+            collection.Add(failed);
+            collection.Add(successful);
+            collection.Add(running);
+            failed.Start();
+            successful.Start();
+            running.Start();
 
             try {
                 await Task.WhenAll(failed.Completion, successful.Completion).WaitAsync(TimeSpan.FromSeconds(5));
@@ -279,7 +330,7 @@ public sealed class OperatorTests {
     /// <returns>A task representing execution of the test.</returns>
     [Test]
     public async Task CollectionSnapshot_ConcurrentMutations_DoNotInvalidateEnumeration() {
-        var collection = new OperationCollection(new OperationContext(null));
+        var collection = new OperationCollection();
         IOperationCollection operations = collection;
         var started = NewSignal();
         var enumerate = NewSignal();
@@ -287,9 +338,8 @@ public sealed class OperatorTests {
             started.SetResult();
             enumerate.Task.GetAwaiter().GetResult();
             for (var index = 0; index < 500; index++) {
-                var item = new Operation($"root {index}", (_, _) => Task.CompletedTask, collection.Context);
+                var item = new Operation($"root {index}", (_, _) => Task.CompletedTask);
                 collection.Add(item);
-                item.Prepare();
                 item.Start();
                 Assert.That(collection.Remove(item), Is.True);
             }
@@ -308,14 +358,21 @@ public sealed class OperatorTests {
     /// <returns>A task representing execution of the test.</returns>
     [Test]
     public Task CollectionSource_TracksAddsAndRemovals() =>
-        UiTestThread.Run(() => {
+        UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var changes = new List<NotifyCollectionChangedAction>();
+            var collectionChanges = NewSignal();
             var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            source.CollectionChanged += (_, args) => changes.Add(args.Action);
+            source.CollectionChanged += (_, args) => {
+                changes.Add(args.Action);
+                if (changes.Count == 2) {
+                    collectionChanges.TrySetResult();
+                }
+            };
             @operator.Operate("failure", (_, _) => Task.FromException(new IOException("failure")));
             var item = @operator.Operations.Snapshot().Single();
             @operator.Operations.Remove(item);
+            await collectionChanges.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.That(changes, Is.EqualTo(new[] { NotifyCollectionChangedAction.Add, NotifyCollectionChangedAction.Remove }));
             return Task.CompletedTask;
@@ -409,15 +466,7 @@ public sealed class OperatorTests {
             var childrenStarted = NewSignal<int>();
             var release = NewSignal();
             var startedCount = 0;
-            Operation root = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    root = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("parent", async (progress, _) => {
+            var root = Start(@operator, "parent", async (progress, _) => {
                 var children = progress.Children(Enumerable.Range(0, 3), index => new OperationChild(
                     index.ToString(), async (_, _) => {
                         startedCount++;
@@ -426,7 +475,6 @@ public sealed class OperatorTests {
                 childrenStarted.TrySetResult(startedCount);
                 await children;
             });
-            source.CollectionChanged -= handler;
             try {
                 var startedBeforeRelease = await childrenStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var parentWasStillRunning = !root.Complete;
@@ -448,14 +496,14 @@ public sealed class OperatorTests {
     /// <returns>A task representing execution of the test.</returns>
     [Test]
     public Task Children_ChildFailureMarksTheParentAsFaulted() =>
-        UiTestThread.Run(() => {
+        UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             @operator.Operate("parent", async (progress, _) => {
                 await progress.Children(new[] { 1 }, _ => new OperationChild(
                     "child", (_, _) => Task.FromException(new IOException("child failed"))));
             });
             var parent = (OperationBase)@operator.Operations.Snapshot().Single();
-            var child = ((IEnumerable)parent.ChildSource).Cast<OperationBase>().Single();
+            var child = (await WaitForChildren(parent)).Single();
             var wasRelevant = ((OperationCollection)@operator.Operations).Relevant;
             var removed = @operator.Operations.Remove(parent);
 
@@ -470,7 +518,6 @@ public sealed class OperatorTests {
                 Assert.That(removed, Is.True);
                 Assert.That(((OperationCollection)@operator.Operations).Relevant, Is.False);
             }
-            return Task.CompletedTask;
         });
 
     /// <summary>Verifies that a failed parent still waits for its registered child.</summary>
@@ -481,24 +528,15 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var childStarted = NewSignal();
             var release = NewSignal();
-            Operation root = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    root = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("parent", (progress, token) => {
+            var root = Start(@operator, "parent", (progress, token) => {
                 _ = progress.Child("child", async (_, _) => {
                     childStarted.TrySetResult();
                     await release.Task;
                 });
                 throw new IOException("parent failed");
             });
-            source.CollectionChanged -= handler;
-            var child = ((IEnumerable)((OperationBase)root).ChildSource).Cast<OperationBase>().Single();
             try {
+                var child = (await WaitForChildren(root)).Single();
                 await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var parentWaitedForChild = !root.Complete;
                 release.SetResult();
@@ -521,17 +559,9 @@ public sealed class OperatorTests {
     /// <returns>A task representing execution of the test.</returns>
     [Test]
     public Task Change_ProgressAndTargetAggregateThroughNestedChildren() =>
-        UiTestThread.Run(() => {
+        UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            Operation root = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    root = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("root", async (progress, _) => {
+            var root = Start(@operator, "root", async (progress, _) => {
                 progress.Change(setProgress: 2, setTarget: 5);
                 await progress.Child("child", async (childProgress, _) => {
                     childProgress.Change(addProgress: 1, addTarget: 3);
@@ -541,9 +571,8 @@ public sealed class OperatorTests {
                     });
                 });
             });
-            source.CollectionChanged -= handler;
-            var child = ((IEnumerable)((OperationBase)root).ChildSource).Cast<OperationBase>().Single();
-            var grandchild = ((IEnumerable)child.ChildSource).Cast<OperationBase>().Single();
+            var child = (await WaitForChildren(root)).Single();
+            var grandchild = (await WaitForChildren(child)).Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(((OperationBase)root).Progress, Is.EqualTo(5L));
@@ -559,24 +588,15 @@ public sealed class OperatorTests {
                 Assert.That(grandchild.Depth, Is.EqualTo(2));
                 Assert.That(grandchild.DepthString, Is.EqualTo(">>"));
             }
-            return Task.CompletedTask;
         });
 
     /// <summary>Verifies that setting a child's numeric values adjusts ancestors by the difference.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
     public Task Change_SettingChildProgressAndTargetPropagatesOnlyTheDifference() =>
-        UiTestThread.Run(() => {
+        UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            Operation root = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    root = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("root", async (progress, _) => {
+            var root = Start(@operator, "root", async (progress, _) => {
                 progress.Change(setProgress: 2, setTarget: 5);
                 await progress.Child("child", (childProgress, _) => {
                     childProgress.Change(setProgress: 3, setTarget: 4);
@@ -584,8 +604,7 @@ public sealed class OperatorTests {
                     return Task.CompletedTask;
                 });
             });
-            source.CollectionChanged -= handler;
-            var child = ((IEnumerable)((OperationBase)root).ChildSource).Cast<OperationBase>().Single();
+            var child = (await WaitForChildren(root)).Single();
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(((OperationBase)root).Progress, Is.EqualTo(3L));
@@ -593,7 +612,6 @@ public sealed class OperatorTests {
                 Assert.That(child.Progress, Is.EqualTo(1L));
                 Assert.That(child.Target, Is.EqualTo(2L));
             }
-            return Task.CompletedTask;
         });
 
     /// <summary>Verifies the percentage calculated from reported progress and target values.</summary>
@@ -622,20 +640,11 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var changed = NewSignal();
             var release = NewSignal();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("zero target", async (progress, _) => {
+            var operation = Start(@operator, "zero target", async (progress, _) => {
                 progress.Change(setProgress: 5);
                 changed.TrySetResult();
                 await release.Task;
             });
-            source.CollectionChanged -= handler;
             try {
                 await changed.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var percentWhileRunning = operation.ProgressPercent;
@@ -660,21 +669,13 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             Operation operation = null;
             var displayValues = new List<(string Progress, string Target)>();
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("strings", (progress, _) => {
+            Start(@operator, "strings", (progress, _) => {
                 progress.Change(setProgress: 1, setTarget: 2, progressString: "one", targetString: "two");
                 displayValues.Add((((OperationBase)operation).ProgressString, ((OperationBase)operation).TargetString));
                 progress.Change(addProgress: 1);
                 displayValues.Add((((OperationBase)operation).ProgressString, ((OperationBase)operation).TargetString));
                 return Task.CompletedTask;
-            });
-            source.CollectionChanged -= handler;
+            }, started => operation = started);
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(displayValues.Select(value => value.Progress), Is.EqualTo(new[] { "one", "2" }));
@@ -690,18 +691,10 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("initial", (progress, _) => {
+            Start(@operator, "initial", (progress, _) => {
                 progress.Change(name: "renamed", data: "copying");
                 return Task.CompletedTask;
-            });
-            source.CollectionChanged -= handler;
+            }, started => operation = started);
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(((OperationBase)operation).Name, Is.EqualTo("renamed"));
@@ -718,14 +711,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             Operation operation = null;
             var changedAgain = false;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("reentrant", (progress, _) => {
+            Start(@operator, "reentrant", (progress, _) => {
                 ((INotifyPropertyChanged)operation).PropertyChanged += (_, args) => {
                     if (!changedAgain && args.PropertyName == nameof(OperationBase.Progress)) {
                         changedAgain = true;
@@ -734,8 +720,7 @@ public sealed class OperatorTests {
                 };
                 progress.Change(setProgress: 1, setTarget: 2);
                 return Task.CompletedTask;
-            });
-            source.CollectionChanged -= handler;
+            }, started => operation = started);
 
             using (Assert.EnterMultipleScope()) {
                 Assert.That(((OperationBase)operation).Progress, Is.EqualTo(2L));
@@ -752,18 +737,11 @@ public sealed class OperatorTests {
         UiTestThread.Run(() => {
             var @operator = CreateOperator();
             var propertyNames = new HashSet<string>();
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    ((INotifyPropertyChanged)args.NewItems[0]).PropertyChanged += (_, change) => propertyNames.Add(change.PropertyName);
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("notifications", (progress, _) => {
+            Start(@operator, "notifications", (progress, _) => {
                 progress.Change(setProgress: 2, setTarget: 4, progressString: "2 items", targetString: "4 items");
                 return Task.CompletedTask;
-            });
-            source.CollectionChanged -= handler;
+            }, operation => ((INotifyPropertyChanged)operation).PropertyChanged += (_, change) =>
+                propertyNames.Add(change.PropertyName));
 
             Assert.That(propertyNames, Is.SupersetOf(new[] {
                 nameof(OperationBase.Progress), nameof(OperationBase.Target),
@@ -845,15 +823,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var started = NewSignal<CancellationToken>();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("cancel", async (_, token) => {
+            var operation = Start(@operator, "cancel", async (_, token) => {
                 started.TrySetResult(token);
                 try {
                     await Task.Delay(Timeout.InfiniteTimeSpan, token);
@@ -861,7 +831,6 @@ public sealed class OperatorTests {
                 catch (OperationCanceledException) when (token.IsCancellationRequested) {
                 }
             });
-            source.CollectionChanged -= handler;
             var token = await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             operation.Cancel();
             await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
@@ -881,15 +850,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var started = NewSignal();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("cancel", async (_, token) => {
+            var operation = Start(@operator, "cancel", async (_, token) => {
                 started.TrySetResult();
                 try {
                     await Task.Delay(Timeout.InfiniteTimeSpan, token);
@@ -897,7 +858,6 @@ public sealed class OperatorTests {
                 catch (OperationCanceledException) when (token.IsCancellationRequested) {
                 }
             });
-            source.CollectionChanged -= handler;
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             operation.Cancel();
             operation.Cancel();
@@ -913,19 +873,10 @@ public sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var started = NewSignal();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("cancel", async (_, token) => {
+            var operation = Start(@operator, "cancel", async (_, token) => {
                 started.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             });
-            source.CollectionChanged -= handler;
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var whileRunning = (operation.CanCancel, operation.CanRemove);
             operation.Cancel();
@@ -962,20 +913,11 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var started = NewSignal();
             var savedProgress = default(IOperationProgress);
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("cancel", async (progress, token) => {
+            var operation = Start(@operator, "cancel", async (progress, token) => {
                 savedProgress = progress;
                 started.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             });
-            source.CollectionChanged -= handler;
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             operation.Cancel();
             Exception childError = null;
@@ -1019,15 +961,7 @@ public sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var started = NewSignal<CancellationToken>();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("cancel", async (_, token) => {
+            var operation = Start(@operator, "cancel", async (_, token) => {
                 token.Register(() => throw new InvalidOperationException("callback failure"));
                 started.TrySetResult(token);
                 try {
@@ -1036,7 +970,6 @@ public sealed class OperatorTests {
                 catch (OperationCanceledException) when (token.IsCancellationRequested) {
                 }
             });
-            source.CollectionChanged -= handler;
             var token = await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             AggregateException cancellationError = null;
             try {
@@ -1062,15 +995,7 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var parentStarted = NewSignal<CancellationToken>();
             var childStarted = NewSignal<CancellationToken>();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("parent", async (progress, token) => {
+            var operation = Start(@operator, "parent", async (progress, token) => {
                 parentStarted.TrySetResult(token);
                 await progress.Child("child", async (_, childToken) => {
                     childStarted.TrySetResult(childToken);
@@ -1081,7 +1006,6 @@ public sealed class OperatorTests {
                     }
                 });
             });
-            source.CollectionChanged -= handler;
             var parentToken = await parentStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var childToken = await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             operation.Cancel();
@@ -1095,6 +1019,161 @@ public sealed class OperatorTests {
             }
         });
 
+    /// <summary>
+    /// Verifies that subtree cancellation releases each active operation's token source lease.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [TestCase(false)]
+    [TestCase(true)]
+    public Task OperationCancellation_ReleasesEveryActiveTreeLeaseToItsOwner(bool throwCallback) =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            var rootStarted = NewSignal<CancellationToken>();
+            var childStarted = NewSignal<CancellationToken>();
+            var grandchildStarted = NewSignal<CancellationToken>();
+            var operation = Start(@operator, "root", async (progress, token) => {
+                rootStarted.TrySetResult(token);
+                await progress.Child("child", async (childProgress, childToken) => {
+                    childStarted.TrySetResult(childToken);
+                    await childProgress.Child("grandchild", async (_, grandchildToken) => {
+                        if (throwCallback) {
+                            grandchildToken.Register(() => throw new InvalidOperationException("callback failure"));
+                        }
+                        grandchildStarted.TrySetResult(grandchildToken);
+                        try {
+                            await Task.Delay(Timeout.InfiniteTimeSpan, grandchildToken);
+                        }
+                        catch (OperationCanceledException) when (grandchildToken.IsCancellationRequested) {
+                        }
+                    });
+                    try {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, childToken);
+                    }
+                    catch (OperationCanceledException) when (childToken.IsCancellationRequested) {
+                    }
+                });
+                try {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) {
+                }
+            });
+
+            await rootStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await grandchildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var child = (await WaitForChildren(operation)).Single();
+            var grandchild = (await WaitForChildren(child)).Single();
+            var operations = new[] { operation, child, grandchild };
+            var tokenSources = operations
+                .Select(item => GetPrivateField<CancellationTokenSource>(item, "TokenSource"))
+                .ToArray();
+
+            AggregateException cancellationError = null;
+            try {
+                operation.Cancel();
+            }
+            catch (AggregateException exception) {
+                cancellationError = exception;
+            }
+            await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+            using (Assert.EnterMultipleScope()) {
+                if (throwCallback) {
+                    Assert.That(cancellationError?.InnerExceptions.SingleOrDefault(),
+                                Is.InstanceOf<InvalidOperationException>());
+                }
+                else {
+                    Assert.That(cancellationError, Is.Null);
+                }
+                foreach (var item in operations) {
+                    Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"), Is.Zero, item.Name);
+                    Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.False, item.Name);
+                }
+                Assert.That(tokenSources.All(IsDisposed), Is.True);
+            }
+        });
+
+    /// <summary>
+    /// Verifies that completed descendants release cancellation leases after a held callback returns.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [Test]
+    public Task OperationCancellation_ReleasesCompletedDescendantLeasesAfterCallbacksFinish() =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            var rootStarted = NewSignal<CancellationToken>();
+            var childStarted = NewSignal<CancellationToken>();
+            var grandchildStarted = NewSignal<CancellationToken>();
+            var callbackEntered = NewSignal();
+            var releaseCallback = NewSignal();
+            var releaseGrandchild = NewSignal();
+            var operation = Start(@operator, "root", async (progress, token) => {
+                rootStarted.TrySetResult(token);
+                await progress.Child("child", async (childProgress, childToken) => {
+                    childStarted.TrySetResult(childToken);
+                    await childProgress.Child("grandchild", async (_, grandchildToken) => {
+                        grandchildToken.Register(() => {
+                            callbackEntered.TrySetResult();
+                            releaseCallback.Task.GetAwaiter().GetResult();
+                        });
+                        grandchildStarted.TrySetResult(grandchildToken);
+                        await releaseGrandchild.Task;
+                    });
+                });
+            });
+            Task cancellation = null;
+            try {
+                await rootStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await grandchildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var child = (await WaitForChildren(operation)).Single();
+                var grandchild = (await WaitForChildren(child)).Single();
+                var operations = new[] { operation, child, grandchild };
+                var tokenSources = operations
+                    .Select(item => GetPrivateField<CancellationTokenSource>(item, "TokenSource"))
+                    .ToArray();
+
+                cancellation = Task.Run(operation.Cancel);
+                await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                releaseGrandchild.TrySetResult();
+                await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+                using (Assert.EnterMultipleScope()) {
+                    foreach (var item in operations) {
+                        Assert.That(item.Complete, Is.True, item.Name);
+                        Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"),
+                                    Is.EqualTo(1), item.Name);
+                        Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.True, item.Name);
+                    }
+                    Assert.That(tokenSources.All(tokenSource => !IsDisposed(tokenSource)), Is.True);
+                }
+
+                releaseCallback.TrySetResult();
+                await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+
+                using (Assert.EnterMultipleScope()) {
+                    foreach (var item in operations) {
+                        Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"), Is.Zero, item.Name);
+                        Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.False, item.Name);
+                    }
+                    Assert.That(tokenSources.All(IsDisposed), Is.True);
+                }
+            }
+            finally {
+                releaseGrandchild.TrySetResult();
+                releaseCallback.TrySetResult();
+                if (cancellation is not null) {
+                    await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        });
+
     /// <summary>Verifies that numeric reporting makes still-running work relevant after the display delay.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
@@ -1103,20 +1182,10 @@ public sealed class OperatorTests {
             var @operator = CreateOperator();
             var release = NewSignal();
             var becameRelevant = NewSignal();
-            Operation operation = null;
-            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-            NotifyCollectionChangedEventHandler handler = (_, args) => {
-                if (args.Action == NotifyCollectionChangedAction.Add) {
-                    operation = (Operation)args.NewItems[0];
-                    ((OperationBase)operation).RelevantChanged += (_, _) => becameRelevant.TrySetResult();
-                }
-            };
-            source.CollectionChanged += handler;
-            @operator.Operate("long operation", async (progress, _) => {
+            var operation = Start(@operator, "long operation", async (progress, _) => {
                 progress.Change(addProgress: 1, addTarget: 1);
                 await release.Task;
-            });
-            source.CollectionChanged -= handler;
+            }, started => ((OperationBase)started).RelevantChanged += (_, _) => becameRelevant.TrySetResult());
             try {
                 await becameRelevant.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var visible = operation.Relevant && ((OperationCollection)@operator.Operations).Relevant;
@@ -1136,20 +1205,10 @@ public sealed class OperatorTests {
         });
 
     private static Operation CaptureWithChange(IOperator @operator, Action<IOperationProgress> change) {
-        Operation operation = null;
-        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-        NotifyCollectionChangedEventHandler handler = (_, args) => {
-            if (args.Action == NotifyCollectionChangedAction.Add) {
-                operation = (Operation)args.NewItems[0];
-            }
-        };
-        source.CollectionChanged += handler;
-        @operator.Operate("change", (progress, _) => {
+        return Start(@operator, "change", (progress, _) => {
             change(progress);
             return Task.CompletedTask;
         });
-        source.CollectionChanged -= handler;
-        return operation;
     }
 
     private sealed class StubOperation : IOperation {

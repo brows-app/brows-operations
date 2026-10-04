@@ -46,31 +46,40 @@ void StartCopy(IOperatorFactory operatorFactory) {
 
 Successful root operations are removed from the collection when they finish. Failed operations remain available with their error state until removed. The WPF control displays relevant operations and their child hierarchy.
 
-## Threading
+## UI scheduling
 
-An operator is affine to the `SynchronizationContext` that is current when it is created. For a WPF app, create it on the dispatcher thread, for example by calling `IOperatorFactory.Create()` there. All operation state changes, property-change notifications, events, and root and child observable collection changes then run on that context, so bindings and handlers never observe a worker thread.
+`IOperatorFactory.Create()` captures `SynchronizationContext.Current` when the operator is created.
+For WPF binding, create the operator on the dispatcher thread or pass the dispatcher context to
+`Create(SynchronizationContext)`. Root and child membership changes take effect immediately.
+Observable collection changes are posted asynchronously to the captured context. With no context, the
+producer that starts a queue drain projects changes synchronously. If a concurrent or reentrant update
+queues a change while a drain is active, its API can return before that projection; the event then runs
+on the active drainer thread.
 
-`Operate`, every `IOperationProgress` member, and cancellation can be called from any thread, including after `ConfigureAwait(false)` or inside `Task.Run`. Calls made off the context are posted to it in order:
+You can call `Operate`, report progress, and register children from worker threads. The operation tree
+synchronizes its state updates. Property-change notifications run on the thread making each update;
+WPF bindings marshal bound property updates to their dispatcher. Direct event subscribers run on the
+updating thread after state locks have been released. Updates commit their state before notifications;
+reentrant reports append their notifications to the current thread's notification batch. The operator
+does not change delegate execution or normal `await` context capture.
+Use `IOperationCollection.Snapshot()` to enumerate roots while other threads add or remove them. For
+UI-bound child collections, enumerate their observable source on the captured dispatcher.
+
+For example, a delegate can report progress and add a child from a worker thread:
 
 ```csharp
-operations.Operate("Hash files", (progress, token) => Task.Run(() => {
-    progress.Change(setTarget: 100);
-    for (var file = 1; file <= 100; file++) {
-        token.ThrowIfCancellationRequested();
-        HashFile(file);
-        progress.Change(addProgress: 1);
-    }
-}, token));
+operations.Operate("Background work", async (progress, token) => {
+    await Task.Run(async () => {
+        progress.Change(data: "Working");
+        await progress.Child("Child work", async (childProgress, childToken) => {
+            await Task.Delay(250, childToken).ConfigureAwait(false);
+            childProgress.Change(setProgress: 1, setTarget: 1);
+        });
+    }, token);
+});
 ```
 
-- Progress reports from workers are applied asynchronously. Consecutive pending reports for an operation are merged, so tight loops do not flood the dispatcher; the final values match applying each report in order.
-- On the context, `Operate` and `Child` start their delegates immediately. From another thread, the operation is first added on the context; an `Operate` delegate then starts on the thread pool, and a `Child` delegate starts on the caller's continuation. Children requested before the parent delegate returns, even without awaiting, are still registered.
-- Read `IOperation` state on the operator's context. `IOperationCollection.Snapshot()` and `Count` are safe from any thread; `Remove` and `RemoveComplete` run synchronously on the context.
-- The operator must not outlive its context. Work posted after a WPF dispatcher shuts down is dropped.
-- When no context is current at creation, such as in a console app or service, changes run on the calling thread under a single operator lock. Notifications are raised while that lock is held, so handlers should not block on other threads that use the operator.
-
-`OperatorControl` requires an operator created on its dispatcher thread and throws `InvalidOperationException` otherwise.
-Because operation state changes on the operator's context, the WPF control's Cancel and Remove commands raise `CanExecuteChanged` on its dispatcher, even when progress is reported or cancellation is requested from another thread.
+The WPF control's Cancel and Remove commands deliver `CanExecuteChanged` on their creating dispatcher. Worker notifications are queued asynchronously; notifications already on the dispatcher are delivered immediately.
 
 After the first progress or target update, an operation becomes relevant if it is still running about one second later. Errors become relevant immediately. Report a change when work begins so long-running tasks become visible.
 

@@ -6,9 +6,15 @@ namespace Brows.Operations;
 
 /// <summary>Reports operation state and starts child operations.</summary>
 /// <remarks>
-/// Members can be called from any thread. Calls made off the operator's synchronization context are
-/// posted to it, so resulting state changes and notifications run on that context; see
-/// <see cref="IOperator"/> for the threading contract.
+/// Progress reports and child registration may run from any thread. Operation state changes are
+/// synchronized across the tree. Observable collection changes are posted asynchronously to the
+/// context captured when the operator was created. Without a captured context, the producer that
+/// starts a serialized queue drain projects changes synchronously. A concurrent or reentrant update
+/// can return before its queued projection, whose event runs on the active drainer thread.
+/// Property-change notifications run on the thread updating state; WPF bindings marshal bound
+/// property updates to their dispatcher.
+/// State is committed before notifications, and subscribers run after state locks have been released.
+/// Reentrant reports append their notifications to the current thread's notification batch.
 /// Register children before the operation's delegate returns; the operation waits for all registered descendants.
 /// </remarks>
 public interface IOperationProgress {
@@ -26,8 +32,6 @@ public interface IOperationProgress {
     /// setting a child's value adjusts ancestors by the difference. Set values are applied before
     /// additions, and numeric values throughout the hierarchy are committed before their notifications.
     /// Every call replaces both display strings, including calls that only update metadata.
-    /// Calls made off the operator's context are applied asynchronously, and consecutive pending
-    /// reports for the same operation are merged with the same final result.
     /// A numeric report starts a delay of about one second, after which still-running work becomes
     /// relevant for display. Errors become relevant immediately.
     /// </remarks>
@@ -48,11 +52,13 @@ public interface IOperationProgress {
     /// <exception cref="InvalidOperationException">The parent delegate has already returned.</exception>
     /// <exception cref="OperationCanceledException">Cancellation has already been requested for the parent.</exception>
     /// <remarks>
-    /// The child is added on the operator's context. On that context, its delegate then starts
-    /// immediately; from another thread, it starts on the caller's continuation after the addition
-    /// completes. Calls made before the parent delegate returns, including calls not awaited, are
-    /// registered before the parent stops accepting children. Its ordinary failures are recorded on the child
-    /// and contribute to the parent's error state, but do not fault the returned task.
+    /// Registration takes effect immediately in the operation tree. The child delegate starts
+    /// synchronously through its first asynchronous wait on the calling thread. With a captured
+    /// context, its observable collection addition is posted asynchronously to that context. Without
+    /// one, the producer that starts a serialized queue drain projects the addition synchronously. A
+    /// concurrent or reentrant call can return before its queued addition is projected; that event runs
+    /// on the active drainer thread. Ordinary failures are recorded on the child and contribute to the
+    /// parent's error state, but do not fault the returned task.
     /// Successful awaiting indicates completion, rather than successful work. Registration failures
     /// and unexpected completion-task failures propagate through the returned task.
     /// </remarks>
@@ -72,8 +78,8 @@ public interface IOperationProgress {
     /// <exception cref="InvalidOperationException">A child is registered after the parent delegate has returned.</exception>
     /// <exception cref="OperationCanceledException">A child is registered after cancellation is requested for the parent.</exception>
     /// <remarks>
-    /// The sequence and child factories are evaluated eagerly, and each child starts as described for
-    /// <see cref="Child"/>. All children are scheduled before this method awaits them, so
+    /// The sequence and child factories are evaluated eagerly, and each delegate starts synchronously
+    /// through its first asynchronous wait. All children are scheduled before this method awaits them, so
     /// asynchronous work may overlap. Child delegate failures are recorded without faulting this
     /// task. Enumeration, factory, registration, and unexpected completion-task failures propagate;
     /// the parent operation still joins children already registered before completing.

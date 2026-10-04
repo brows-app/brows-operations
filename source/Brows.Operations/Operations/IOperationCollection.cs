@@ -4,8 +4,14 @@ namespace Brows.Operations;
 
 /// <summary>Provides access to the root operations tracked by an operator.</summary>
 /// <remarks>
-/// Root additions, removals, and notifications run on the operator's synchronization context; see
-/// <see cref="IOperator"/>. <see cref="Count"/> and <see cref="Snapshot"/> can be used from any thread.
+/// Root membership changes synchronously. Observable changes are posted asynchronously to the
+/// context captured when the operator was created. Without a captured context, the producer that
+/// starts a queue drain projects changes synchronously. A concurrent or reentrant update can enqueue
+/// while that drain is active and return before its observable projection; the event then runs on the
+/// active drainer thread. Property-change notifications run on the thread updating state.
+/// <see cref="Snapshot"/> can be enumerated while roots are added or removed.
+/// State notifications are delivered after state locks have been released. Reentrant updates append
+/// their notifications to the current thread's notification batch.
 /// </remarks>
 public interface IOperationCollection {
     /// <summary>Gets the number of root operations currently in the collection.</summary>
@@ -22,7 +28,10 @@ public interface IOperationCollection {
     /// still running, or not in this collection.
     /// </returns>
     /// <remarks>
-    /// Removal runs synchronously on the operator's context, sending to it when called from another thread.
+    /// Membership is updated before this method returns. With a captured context, the observable
+    /// removal is posted asynchronously to that context. Without one, a producer that starts a queue
+    /// drain projects it synchronously. A concurrent or reentrant call can return before a queued
+    /// removal is projected; its event runs on the active drainer thread.
     /// </remarks>
     bool Remove(IOperation item);
 
@@ -36,8 +45,11 @@ public interface IOperationCollection {
     /// </param>
     /// <returns>The number of operations removed.</returns>
     /// <remarks>
-    /// Selection and removal run synchronously on the operator's context, sending to it when called
-    /// from another thread.
+    /// Membership changes before this method returns. With a captured context, observable removals
+    /// are posted asynchronously to that context. Without one, a producer that starts a queue drain
+    /// projects them synchronously. A concurrent or reentrant call can return before a queued removal
+    /// is projected; its event runs on the active drainer thread. Completed operations are selected
+    /// from a snapshot of the collection.
     /// </remarks>
     int RemoveComplete(bool? withError = null);
 }

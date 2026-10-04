@@ -19,18 +19,90 @@ public sealed class RegressionTests {
     // Start work through IOperator. Inspect internals only for state the public interfaces do not expose.
     private static Operation Start(IOperator @operator, OperationDelegate task) {
         Operation operation = null;
-        var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-        NotifyCollectionChangedEventHandler added = (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) operation = (Operation)e.NewItems[0];
-        };
-        source.CollectionChanged += added;
-        try { @operator.Operate("root", task); }
-        finally { source.CollectionChanged -= added; }
+        new OperationManager((OperationCollection)@operator.Operations)
+            .Operate("root", task, started => operation = started);
         return operation;
     }
 
-    private static OperationBase[] Children(OperationBase operation) =>
-        ((IEnumerable)operation.ChildSource).Cast<OperationBase>().ToArray();
+    private static async Task<OperationBase[]> WaitForChildren(OperationBase operation, int count = 1) {
+        var children = (IList)operation.ChildSource;
+        if (children.Count < count) {
+            var changed = Signal();
+            NotifyCollectionChangedEventHandler handler = (_, _) => {
+                if (children.Count >= count) {
+                    changed.TrySetResult();
+                }
+            };
+            var source = (INotifyCollectionChanged)children;
+            source.CollectionChanged += handler;
+            try {
+                if (children.Count < count) {
+                    await changed.Task.WaitAsync(Timeout);
+                }
+            }
+            finally {
+                source.CollectionChanged -= handler;
+            }
+        }
+        return children.Cast<OperationBase>().ToArray();
+    }
+
+    /// <summary>Verifies that concurrent worker reports do not lose progress or target increments.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task ConcurrentProgressReports_AggregateWithoutLostUpdates() => UiTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        const int workerCount = 8;
+        const int reportsPerWorker = 500;
+        var expected = workerCount * reportsPerWorker;
+        var root = Start(@operator, async (progress, _) => {
+            await Task.WhenAll(Enumerable.Range(0, workerCount).Select(_ => Task.Run(() => {
+                for (var report = 0; report < reportsPerWorker; report++) {
+                    progress.Change(addProgress: 1, addTarget: 1);
+                }
+            })));
+        });
+
+        await root.Completion.WaitAsync(Timeout);
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(root.Progress, Is.EqualTo(expected));
+            Assert.That(root.Target, Is.EqualTo(expected));
+            Assert.That(root.ProgressPercent, Is.EqualTo(100d));
+        }
+    });
+
+    /// <summary>Verifies that child registrations from worker threads are joined and published.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task ConcurrentChildRegistrations_AreJoinedAndPublished() => UiTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        const int workerCount = 8;
+        var registered = Signal();
+        var release = Signal();
+        var root = Start(@operator, async (progress, _) => {
+            var registrations = await Task.WhenAll(Enumerable.Range(0, workerCount).Select(index =>
+                Task.Run(() => Tuple.Create(progress.Child($"child {index}", async (_, _) => await release.Task)))));
+            var children = registrations.Select(registration => registration.Item1).ToArray();
+            registered.TrySetResult();
+            await Task.WhenAll(children);
+        });
+
+        try {
+            await registered.Task.WaitAsync(Timeout);
+            var children = await WaitForChildren(root, workerCount);
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(children, Has.Length.EqualTo(workerCount));
+                Assert.That(children.Select(child => child.Name).Distinct().Count(), Is.EqualTo(workerCount));
+            }
+        }
+        finally {
+            release.TrySetResult();
+        }
+        await root.Completion.WaitAsync(Timeout);
+
+        Assert.That((await WaitForChildren(root, workerCount)).All(child => child.Complete), Is.True);
+    });
 
     /// <summary>Verifies that synchronous child success allows the completed root to be removed.</summary>
     /// <returns>A task representing execution of the test.</returns>
@@ -109,7 +181,7 @@ public sealed class RegressionTests {
         using (Assert.EnterMultipleScope()) {
             Assert.That(registrationError, Is.InstanceOf<InvalidOperationException>());
             Assert.That(childStarted, Is.False);
-            Assert.That(Children(root).Length, Is.EqualTo(1));
+            Assert.That((await WaitForChildren(root)).Length, Is.EqualTo(1));
         }
     });
 
@@ -175,7 +247,7 @@ public sealed class RegressionTests {
             Assert.That(stateWhileJoining.Progressing, Is.True);
             Assert.That(stateWhileJoining.HasError, Is.True);
             Assert.That(root.CompleteWithError, Is.True);
-            Assert.That(Children(root).Single().Complete, Is.True);
+            Assert.That((await WaitForChildren(root)).Single().Complete, Is.True);
         }
     });
 
@@ -226,8 +298,8 @@ public sealed class RegressionTests {
             IOperationProgress leafProgress = null;
             var root = Start(@operator, async (progress, _) => await progress.Child("middle", async (middle, _) =>
                 await middle.Child("leaf", async (leaf, _) => { leafProgress = leaf; await release.Task; })));
-            var middleOperation = Children(root).Single();
-            var leafOperation = Children(middleOperation).Single();
+            var middleOperation = (await WaitForChildren(root)).Single();
+            var leafOperation = (await WaitForChildren(middleOperation)).Single();
             var first = true;
             (long Root, long Middle, long Leaf) notificationValues = default;
             root.PropertyChanged += (_, e) => {
@@ -355,10 +427,10 @@ public sealed class RegressionTests {
         return Task.CompletedTask;
     });
 
-    /// <summary>Verifies that cancellation between child registration and startup skips the child's delegate.</summary>
+    /// <summary>Verifies that cancellation from a queued child collection event reaches the running child.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task CancellationBetweenChildRegistrationAndStart_SkipsItsDelegate() => UiTestThread.Run(async () => {
+    public Task CollectionNotificationCancellation_CancelsRunningChild() => UiTestThread.Run(async () => {
         IOperator @operator = new Operator();
         var release = Signal();
         IOperationProgress retained = null;
@@ -366,12 +438,71 @@ public sealed class RegressionTests {
         var source = (INotifyCollectionChanged)root.ChildSource;
         source.CollectionChanged += (_, _) => root.Cancel();
         var childRan = false;
-        await retained.Child("child", (_, _) => { childRan = true; return Task.CompletedTask; });
+        await retained.Child("child", (_, token) => {
+            childRan = true;
+            return Task.Delay(System.Threading.Timeout.Infinite, token);
+        });
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
         using (Assert.EnterMultipleScope()) {
+            Assert.That(childRan, Is.True);
+            var child = (await WaitForChildren(root)).Single();
+            Assert.That(child.Complete, Is.True);
+            Assert.That(root.CompleteWithError, Is.False);
+        }
+    });
+
+    /// <summary>Verifies cancellation can win between atomic child registration and delegate startup.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task CancellationBeforeChildStart_SkipsChildDelegate() => UiTestThread.Run(async () => {
+        var @operator = await Task.Run(() => new Operator());
+        Assert.That(((OperationCollection)@operator.Operations).Synchronization.SynchronizationContext, Is.Null);
+        var release = Signal();
+        IOperationProgress retained = null;
+        var root = Start(@operator, async (progress, _) => { retained = progress; await release.Task; });
+        ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) => root.Cancel();
+        var childRan = false;
+        await retained.Child("child", (_, _) => { childRan = true; return Task.CompletedTask; });
+        release.SetResult();
+        await root.Completion.WaitAsync(Timeout);
+
+        using (Assert.EnterMultipleScope()) {
             Assert.That(childRan, Is.False);
-            Assert.That(Children(root).Single().Complete, Is.True);
+            Assert.That(((IList)root.ChildSource).Count, Is.EqualTo(1));
+            Assert.That(root.CompleteWithError, Is.False);
+        }
+    });
+
+    /// <summary>
+    /// Verifies operation completion defers token-source disposal until an active cancellation returns.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Cancel_CompletionWaitsForActiveTokenCallbacksBeforeDisposal() => UiTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        var callbackEntered = Signal();
+        var releaseCallback = Signal();
+        var releaseOperation = Signal();
+        var root = Start(@operator, async (_, token) => {
+            token.Register(() => {
+                callbackEntered.TrySetResult();
+                releaseCallback.Task.GetAwaiter().GetResult();
+            });
+            await releaseOperation.Task;
+        });
+
+        var cancellation = Task.Run(root.Cancel);
+        await callbackEntered.Task.WaitAsync(Timeout);
+        releaseOperation.SetResult();
+        await root.Completion.WaitAsync(Timeout);
+        var cancellationStillRunning = !cancellation.IsCompleted;
+        releaseCallback.SetResult();
+        await cancellation.WaitAsync(Timeout);
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(cancellationStillRunning, Is.True);
+            Assert.That(root.Complete, Is.True);
             Assert.That(root.CompleteWithError, Is.False);
         }
     });
@@ -389,8 +520,9 @@ public sealed class RegressionTests {
         (bool Root, bool Middle, bool Leaf, bool Collection) state;
         try {
             await relevant.Task.WaitAsync(Timeout);
-            var middle = Children(root).Single();
-            state = (root.Relevant, middle.Relevant, Children(middle).Single().Relevant,
+            var middle = (await WaitForChildren(root)).Single();
+            var leaf = (await WaitForChildren(middle)).Single();
+            state = (root.Relevant, middle.Relevant, leaf.Relevant,
                 ((OperationCollection)@operator.Operations).Relevant);
         }
         finally { release.TrySetResult(); }
@@ -526,38 +658,75 @@ public sealed class RegressionTests {
     });
 
     /// <summary>Verifies that a rejected early removal request preserves later command removal.</summary>
-    /// <param name="duringFinalization">Whether to make the early removal request from a finalization notification.</param>
+    /// <param name="duringErrorNotification">
+    /// Whether to request removal from the delegate-error notification.
+    /// </param>
     /// <returns>A task representing execution of the test.</returns>
     [TestCase(false)]
     [TestCase(true)]
-    public Task Remove_RejectedRequestKeepsTheHandlerForRemovalAfterCompletion(bool duringFinalization) => UiTestThread.Run(async () => {
+    public Task Remove_RejectedRequestKeepsTheHandlerForRemovalAfterCompletion(bool duringErrorNotification) =>
+        UiTestThread.Run(async () => {
+            IOperator @operator = new Operator();
+            var release = Signal();
+            var root = Start(@operator, async (_, _) => { await release.Task; throw new IOException("failure"); });
+            var eligibleBefore = true;
+            var countAfterRejectedRequest = -1;
+            void RequestEarlyRemoval() {
+                eligibleBefore = root.CanRemove;
+                root.Remove();
+                countAfterRejectedRequest = @operator.Operations.Count;
+            }
+            if (duringErrorNotification) {
+                root.PropertyChanged += (_, e) => {
+                    if (e.PropertyName == nameof(OperationBase.Error)) RequestEarlyRemoval();
+                };
+            }
+            else {
+                RequestEarlyRemoval();
+            }
+            release.SetResult();
+            await root.Completion.WaitAsync(Timeout);
+            var eligibleAfter = root.CanRemove;
+            root.Remove();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(eligibleBefore, Is.False);
+                Assert.That(countAfterRejectedRequest, Is.EqualTo(1));
+                Assert.That(eligibleAfter, Is.True);
+                Assert.That(@operator.Operations.Count, Is.EqualTo(0));
+            }
+        });
+
+    /// <summary>
+    /// Verifies finalization notifications expose committed completion and relevance before reentrant removal.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
+    [Test]
+    public Task FinalizationNotification_ObservesCommittedStateAndAllowsRemoval() => UiTestThread.Run(async () => {
         IOperator @operator = new Operator();
         var release = Signal();
         var root = Start(@operator, async (_, _) => { await release.Task; throw new IOException("failure"); });
-        var eligibleBefore = true;
-        var countAfterRejectedRequest = -1;
-        void RequestEarlyRemoval() {
-            eligibleBefore = root.CanRemove;
-            root.Remove();
-            countAfterRejectedRequest = @operator.Operations.Count;
-        }
-        if (duringFinalization) {
-            root.PropertyChanged += (_, e) => {
-                if (e.PropertyName == nameof(OperationBase.Progressing) && !root.Progressing) RequestEarlyRemoval();
-            };
-        }
-        else {
-            RequestEarlyRemoval();
-        }
+        (bool Complete, bool CanRemove, bool WithError, bool CollectionRelevant) state = default;
+        var countAfterRemoval = -1;
+        root.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(OperationBase.Progressing) && !root.Progressing) {
+                state = (root.Complete, root.CanRemove, root.CompleteWithError,
+                    ((OperationCollection)@operator.Operations).Relevant);
+                root.Remove();
+                countAfterRemoval = @operator.Operations.Count;
+            }
+        };
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
-        var eligibleAfter = root.CanRemove;
-        root.Remove();
+
         using (Assert.EnterMultipleScope()) {
-            Assert.That(eligibleBefore, Is.False);
-            Assert.That(countAfterRejectedRequest, Is.EqualTo(1));
-            Assert.That(eligibleAfter, Is.True);
-            Assert.That(@operator.Operations.Count, Is.EqualTo(0));
+            Assert.That(state.Complete, Is.True);
+            Assert.That(state.CanRemove, Is.True);
+            Assert.That(state.WithError, Is.True);
+            Assert.That(state.CollectionRelevant, Is.True);
+            Assert.That(countAfterRemoval, Is.Zero);
+            Assert.That(((OperationCollection)@operator.Operations).Relevant, Is.False);
         }
     });
 

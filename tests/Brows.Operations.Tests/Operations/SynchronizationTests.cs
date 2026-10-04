@@ -10,57 +10,82 @@ using System.Threading.Tasks;
 
 namespace Brows.Operations;
 
-/// <summary>Tests that operator state changes are marshalled to the operator's synchronization context.</summary>
+/// <summary>Tests context capture and collection mutations from worker continuations.</summary>
 [TestFixture]
 public sealed class SynchronizationTests {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+    private sealed class QueuedSynchronizationContext : SynchronizationContext {
+        private readonly ConcurrentQueue<(SendOrPostCallback Callback, object State)> Queue = new();
 
-    private sealed class CountingContext : SynchronizationContext {
-        private readonly SynchronizationContext Inner;
-        private int PostCount;
-
-        public int Posts => Volatile.Read(ref PostCount);
-
-        public CountingContext(SynchronizationContext inner) {
-            Inner = inner;
-        }
-
-        public override void Post(SendOrPostCallback callback, object state) {
-            Interlocked.Increment(ref PostCount);
-            Inner.Post(callback, state);
-        }
-
-        public override void Send(SendOrPostCallback callback, object state) {
-            Inner.Send(callback, state);
-        }
-    }
-
-    private sealed class ManualContext : SynchronizationContext {
-        public ConcurrentQueue<(SendOrPostCallback Callback, object State)> Queue { get; } = new();
+        public int Pending => Queue.Count;
 
         public override void Post(SendOrPostCallback callback, object state) {
             Queue.Enqueue((callback, state));
         }
+
+        public void RunPending() {
+            var previous = Current;
+            SetSynchronizationContext(this);
+            try {
+                while (Queue.TryDequeue(out var work)) {
+                    work.Callback(work.State);
+                }
+            }
+            finally {
+                SetSynchronizationContext(previous);
+            }
+        }
     }
+
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     private static TaskCompletionSource<bool> NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    /// <summary>Verifies worker execution marshals root additions, cleanup, and notifications.</summary>
+    /// <summary>Verifies collection changes are posted without blocking the operation caller.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Manager_WorkerExecution_MarshalsRootMutationsAndNotifications() => UiTestThread.Run(async () => {
+    public Task Manager_WorkerExecution_PostsChangesAsynchronously() => UiTestThread.Run(async () => {
+        var context = new QueuedSynchronizationContext();
+        var collection = new OperationCollection(new OperationSynchronization(context));
+        var manager = new OperationManager(collection);
+        var changes = new List<(NotifyCollectionChangedAction Action, SynchronizationContext Context)>();
+        ((INotifyCollectionChanged)collection.Source).CollectionChanged += (_, e) =>
+            changes.Add((e.Action, SynchronizationContext.Current));
+
+        await Task.Run(() => manager.Operate("synchronous root", (_, _) => Task.CompletedTask)).WaitAsync(Timeout);
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(changes, Is.Empty);
+            Assert.That(context.Pending, Is.EqualTo(1));
+            Assert.That(collection.Count, Is.Zero);
+        }
+        context.RunPending();
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(changes.Select(change => change.Action), Is.EqualTo(new[] {
+                NotifyCollectionChangedAction.Add,
+                NotifyCollectionChangedAction.Remove
+            }));
+            Assert.That(changes.All(change => change.Context == context), Is.True);
+            Assert.That(collection.Count, Is.Zero);
+        }
+    });
+
+    /// <summary>Verifies worker execution marshals root additions and automatic cleanup, but not count notifications.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Manager_WorkerExecution_UsesSuppliedContextForRootMutations() => UiTestThread.Run(async () => {
         var collection = new OperationCollection();
         IOperationCollection operations = collection;
         var context = SynchronizationContext.Current;
         var manager = new OperationManager(collection);
         var mutations = new List<SynchronizationContext>();
         var notifications = new List<SynchronizationContext>();
-        var removed = NewSignal();
-        ((INotifyCollectionChanged)collection.Source).CollectionChanged += (_, e) => {
+        var collectionChanges = NewSignal();
+        ((INotifyCollectionChanged)((OperationCollection)operations).Source).CollectionChanged += (_, _) => {
             mutations.Add(SynchronizationContext.Current);
-            if (e.Action == NotifyCollectionChangedAction.Remove) {
-                removed.TrySetResult(true);
+            if (mutations.Count == 2) {
+                collectionChanges.TrySetResult(true);
             }
         };
         collection.PropertyChanged += (_, e) => {
@@ -69,88 +94,114 @@ public sealed class SynchronizationTests {
             }
         };
         await Task.Run(() => manager.Operate("worker root", (_, _) => Task.CompletedTask)).WaitAsync(Timeout);
-        await removed.Task.WaitAsync(Timeout);
+        await collectionChanges.Task.WaitAsync(Timeout);
         using (Assert.EnterMultipleScope()) {
             Assert.That(mutations, Is.EqualTo(new[] { context, context }));
-            Assert.That(notifications, Is.EqualTo(new[] { context, context }));
+            Assert.That(notifications, Is.EqualTo(new SynchronizationContext[] { null, null }));
             Assert.That(operations.Count, Is.Zero);
         }
     });
 
-    /// <summary>Verifies collection changes for all descendants run on the operator's context.</summary>
+    /// <summary>Verifies root and descendant collection changes use the context captured at creation.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Operate_MarshalsDescendantCollectionChangesToContext() => UiTestThread.Run(async () => {
-        IOperator @operator = new Operator();
-        var context = SynchronizationContext.Current;
-        var uiThread = Environment.CurrentManagedThreadId;
-        var release = NewSignal();
-        var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
-        Operation root = null;
-        void Subscribe(OperationBase parent) {
-            ((INotifyCollectionChanged)parent.ChildSource).CollectionChanged += (_, e) => {
-                var child = (OperationBase)e.NewItems[0];
-                mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
-                Subscribe(child);
-            };
-        }
-        ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, e) => {
-            mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
-            if (e.Action == NotifyCollectionChangedAction.Add) {
-                root = (Operation)e.NewItems[0];
-                Subscribe(root);
-            }
-        };
-        try {
-            @operator.Operate("root", async (progress, _) => {
-                Assert.That(SynchronizationContext.Current, Is.SameAs(context));
-                await release.Task.ConfigureAwait(false);
-                await progress.Children(new[] { 1, 2 }, index => new OperationChild($"child {index}",
-                    async (childProgress, _) => {
-                        await Task.Run(async () => {
-                            await childProgress.Child("grandchild", (_, _) => Task.CompletedTask);
-                        }, CancellationToken.None).ConfigureAwait(false);
-                    })).ConfigureAwait(false);
-            });
-            Assert.That(root, Is.Not.Null);
-            release.SetResult(true);
-            await root.Completion.WaitAsync(Timeout);
-            await Task.Yield();
-            using (Assert.EnterMultipleScope()) {
-                Assert.That(mutations.Select(item => item.Depth).OrderBy(depth => depth),
-                            Is.EqualTo(new[] { 0, 0, 1, 1, 2, 2 }));
-                Assert.That(mutations.All(item => item.Context == context && item.Thread == uiThread), Is.True);
-                Assert.That(@operator.Operations.Count, Is.Zero);
-            }
-        }
-        finally {
-            release.TrySetResult(true);
-        }
-    });
+    public Task Operate_UsesContextCapturedAtCreationForDescendantCollections() =>
+        UiTestThread.Run(async () => {
+                var context = SynchronizationContext.Current;
+                var uiThread = Environment.CurrentManagedThreadId;
+                IOperator @operator = new Operator(context);
+                var release = NewSignal();
+                var collectionChanges = NewSignal();
+                var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
+                Operation root = null;
+                void Subscribe(OperationBase parent) {
+                    ((INotifyCollectionChanged)parent.ChildSource).CollectionChanged += (_, e) => {
+                        var child = (OperationBase)e.NewItems[0];
+                        mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
+                        if (mutations.Count == 6) {
+                            collectionChanges.TrySetResult(true);
+                        }
+                        Subscribe(child);
+                    };
+                }
+                var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
+                NotifyCollectionChangedEventHandler changed = (_, e) => {
+                    mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
+                    if (mutations.Count == 6) {
+                        collectionChanges.TrySetResult(true);
+                    }
+                };
+                source.CollectionChanged += changed;
+                try {
+                    OperationDelegate task = async (progress, _) => {
+                        Assert.That(SynchronizationContext.Current, Is.SameAs(context));
+                        await release.Task.ConfigureAwait(false);
+                        await progress.Children(new[] { 1, 2 }, index => new OperationChild($"child {index}",
+                            async (childProgress, _) => {
+                                await Task.Run(async () => {
+                                    await childProgress.Child("grandchild", (_, _) => Task.CompletedTask);
+                                }, CancellationToken.None).ConfigureAwait(false);
+                            })).ConfigureAwait(false);
+                    };
+                    @operator.Operate("root", task);
+                    root = (Operation)@operator.Operations.Snapshot().Single();
+                    Subscribe(root);
+                    Assert.That(root, Is.Not.Null);
+                    release.SetResult(true);
+                    await root.Completion.WaitAsync(Timeout);
+                    await collectionChanges.Task.WaitAsync(Timeout);
+                    using (Assert.EnterMultipleScope()) {
+                        Assert.That(mutations.Select(item => item.Depth).OrderBy(depth => depth), Is.EqualTo(new[] { 0, 0, 1, 1, 2, 2 }));
+                        Assert.That(mutations.Where(item => item.Depth == 0)
+                            .All(item => item.Context == context && item.Thread == uiThread), Is.True);
+                        Assert.That(mutations.Where(item => item.Depth > 0)
+                            .All(item => item.Context == context && item.Thread == uiThread), Is.True);
+                        Assert.That(@operator.Operations.Count, Is.Zero);
+                    }
+                }
+                finally {
+                    release.TrySetResult(true);
+                    source.CollectionChanged -= changed;
+                }
+        });
 
-    /// <summary>Verifies all public and command removal paths run on the operator's context.</summary>
+    /// <summary>Verifies all public and command removal paths use the operation's captured context.</summary>
     /// <param name="removal">The removal API to exercise.</param>
     /// <returns>A task representing execution of the test.</returns>
     [TestCase("collection")]
     [TestCase("command")]
     [TestCase("all")]
     [TestCase("errors")]
-    public Task WorkerRemoval_RunsOnContext(string removal) =>
+    public Task WorkerRemoval_UsesCapturedContext(string removal) =>
         UiTestThread.Run(async () => {
             IOperator @operator = new Operator();
             var context = SynchronizationContext.Current;
             var uiThread = Environment.CurrentManagedThreadId;
             @operator.Operate("failed", (_, _) => Task.FromException(new IOException("failure")));
             var root = (Operation)@operator.Operations.Snapshot().Single();
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
+            var rootAdded = NewSignal();
+            NotifyCollectionChangedEventHandler added = (_, e) => {
+                if (e.Action == NotifyCollectionChangedAction.Add) {
+                    rootAdded.TrySetResult(true);
+                }
+            };
+            source.CollectionChanged += added;
+            await rootAdded.Task.WaitAsync(Timeout);
+            source.CollectionChanged -= added;
+            var collectionChanged = NewSignal();
             SynchronizationContext mutationContext = null;
             var mutationThread = 0;
             var count = 0;
-            ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, _) => {
+            source.CollectionChanged += (_, _) => {
                 mutationContext = SynchronizationContext.Current;
                 mutationThread = Environment.CurrentManagedThreadId;
                 count++;
+                collectionChanged.TrySetResult(true);
             };
+            var workerThread = 0;
             var removed = await Task.Run(() => {
+                workerThread = Environment.CurrentManagedThreadId;
                 switch (removal) {
                     case "collection": return @operator.Operations.Remove(root) ? 1 : 0;
                     case "command": root.Remove(); return 1;
@@ -158,6 +209,7 @@ public sealed class SynchronizationTests {
                     default: return @operator.Operations.RemoveComplete();
                 }
             }).WaitAsync(Timeout);
+            await collectionChanged.Task.WaitAsync(Timeout);
             using (Assert.EnterMultipleScope()) {
                 Assert.That(removed, Is.EqualTo(1));
                 Assert.That(count, Is.EqualTo(1));
@@ -167,15 +219,14 @@ public sealed class SynchronizationTests {
             }
         });
 
-    /// <summary>Verifies progress reported on a worker is applied and notified on the operator's context.</summary>
+    /// <summary>Verifies progress properties and notifications remain on the worker reporting them.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task WorkerProgress_MarshalsPropertyNotificationsToContext() => UiTestThread.Run(async () => {
+    public Task WorkerProgress_DoesNotMarshalPropertyNotifications() => UiTestThread.Run(async () => {
         IOperator @operator = new Operator();
-        var uiThread = Environment.CurrentManagedThreadId;
         var release = NewSignal();
         var workerThread = 0;
-        var notifications = new List<int>();
+        var notifications = new List<(SynchronizationContext Context, int Thread)>();
         @operator.Operate("root", async (progress, _) => {
             await release.Task.ConfigureAwait(false);
             workerThread = Environment.CurrentManagedThreadId;
@@ -185,250 +236,27 @@ public sealed class SynchronizationTests {
         root.PropertyChanged += (_, e) => {
             if (e.PropertyName is nameof(OperationBase.Name) or nameof(OperationBase.Data) or
                 nameof(OperationBase.Progress) or nameof(OperationBase.Target)) {
-                notifications.Add(Environment.CurrentManagedThreadId);
+                notifications.Add((SynchronizationContext.Current, Environment.CurrentManagedThreadId));
             }
         };
         release.SetResult(true);
         await root.Completion.WaitAsync(Timeout);
         using (Assert.EnterMultipleScope()) {
-            Assert.That(workerThread, Is.Not.EqualTo(uiThread));
-            Assert.That(notifications, Is.EqualTo(new[] { uiThread, uiThread, uiThread, uiThread }));
-            Assert.That(root.Name, Is.EqualTo("worker"));
-            Assert.That(root.Data, Is.EqualTo("details"));
+            Assert.That(notifications.Count, Is.EqualTo(4));
+            Assert.That(notifications.All(item => item.Context is null && item.Thread == workerThread), Is.True);
             Assert.That(root.Progress, Is.EqualTo(1));
             Assert.That(root.Target, Is.EqualTo(2));
         }
     });
 
-    /// <summary>Verifies worker reports are coalesced into one post with sequentially correct values.</summary>
-    /// <returns>A task representing execution of the test.</returns>
+    /// <summary>
+    /// Verifies sequential no-context collection projection drains synchronously and worker child registration works.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
     [Test]
-    public Task WorkerProgress_CoalescesReports() => UiTestThread.Run(async () => {
-        var context = new CountingContext(SynchronizationContext.Current);
-        var @operator = new Operator(context);
-        var done = NewSignal();
-        IOperationProgress reporter = null;
-        @operator.Operate("root", async (progress, _) => {
-            reporter = progress;
-            await done.Task;
-        });
-        var root = (Operation)@operator.Operations.Snapshot().Single();
-        var collection = (OperationCollection)@operator.Operations;
-        var posts = context.Posts;
-        /*
-         * Block the context while the worker reports, so every report is pending at once.
-         */
-        Task.Run(() => {
-            reporter.Change(setTarget: 100, name: "renamed");
-            for (var i = 0; i < 1000; i++) {
-                reporter.Change(addProgress: 1, progressString: "adding");
-            }
-            reporter.Change(setProgress: 50);
-            reporter.Change(addProgress: 3);
-            reporter.Change(addProgress: 1, progressString: "final", data: "d");
-        }).Wait(Timeout);
-        var postsWhileBlocked = context.Posts - posts;
-        collection.Context.Invoke(() => { });
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(postsWhileBlocked, Is.EqualTo(1));
-            Assert.That(root.Progress, Is.EqualTo(54));
-            Assert.That(root.Target, Is.EqualTo(100));
-            Assert.That(root.ProgressString, Is.EqualTo("final"));
-            Assert.That(root.TargetString, Is.EqualTo("100"));
-            Assert.That(root.Name, Is.EqualTo("renamed"));
-            Assert.That(root.Data, Is.EqualTo("d"));
-        }
-        done.SetResult(true);
-        await root.Completion.WaitAsync(Timeout);
-    });
-
-    /// <summary>Verifies a worker report and an unawaited child apply in order before the parent closes.</summary>
-    /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public Task WorkerChange_ThenUnawaitedChild_AreOrderedAndRegistered() => UiTestThread.Run(async () => {
-        IOperator @operator = new Operator();
-        var release = NewSignal();
-        var events = new List<string>();
-        Task child = null;
-        @operator.Operate("root", async (progress, _) => {
-            await release.Task.ConfigureAwait(false);
-            progress.Change(name: "before child");
-            child = progress.Child("late", async (_, _) => await Task.Yield());
-        });
-        var root = (Operation)@operator.Operations.Snapshot().Single();
-        root.PropertyChanged += (_, e) => {
-            if (e.PropertyName == nameof(OperationBase.Name)) {
-                events.Add("name");
-            }
-        };
-        ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) => events.Add("child");
-        release.SetResult(true);
-        await root.Completion.WaitAsync(Timeout);
-        await child.WaitAsync(Timeout);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(events, Is.EqualTo(new[] { "name", "child" }));
-            Assert.That(root.Error, Is.Null);
-            Assert.That(((IEnumerable)root.ChildSource).Cast<OperationBase>().Single().Complete, Is.True);
-        }
-    });
-
-    /// <summary>Verifies worker child registration after cancellation or after the parent returns fails.</summary>
-    /// <param name="cancel">Whether to cancel the parent before registration.</param>
-    /// <returns>A task representing execution of the test.</returns>
-    [TestCase(true)]
-    [TestCase(false)]
-    public Task WorkerChild_AfterCancelOrClose_Fails(bool cancel) => UiTestThread.Run(async () => {
-        IOperator @operator = new Operator();
-        var release = NewSignal();
-        var registered = NewSignal();
-        var finish = NewSignal();
-        IOperationProgress reporter = null;
-        Operation root = null;
-        ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) {
-                root = (Operation)e.NewItems[0];
-            }
-        };
-        @operator.Operate("root", async (progress, _) => {
-            reporter = progress;
-            if (cancel) {
-                await release.Task.ConfigureAwait(false);
-                registered.TrySetResult(true);
-                await finish.Task.ConfigureAwait(false);
-            }
-        });
-        Type expected;
-        if (cancel) {
-            release.SetResult(true);
-            await registered.Task.WaitAsync(Timeout);
-            root.Cancel();
-            expected = typeof(OperationCanceledException);
-        }
-        else {
-            expected = typeof(InvalidOperationException);
-        }
-        var error = await Task.Run(async () => {
-            try {
-                await reporter.Child("too late", (_, _) => Task.CompletedTask);
-                return null;
-            }
-            catch (Exception ex) {
-                return ex;
-            }
-        }).WaitAsync(Timeout);
-        finish.SetResult(true);
-        await root.Completion.WaitAsync(Timeout);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(error, Is.InstanceOf(expected));
-            Assert.That(root.Canceling, Is.EqualTo(cancel));
-            Assert.That(root.ChildSource, Is.Empty);
-        }
-    });
-
-    /// <summary>Verifies Operate starts synchronously on the context and on the thread pool from a worker.</summary>
-    /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public Task Operate_FromWorker_RegistersOnContextAndRunsOffContext() => UiTestThread.Run(async () => {
-        IOperator @operator = new Operator();
-        var uiThread = Environment.CurrentManagedThreadId;
-        var syncThread = 0;
-        @operator.Operate("sync", (_, _) => {
-            syncThread = Environment.CurrentManagedThreadId;
-            return Task.CompletedTask;
-        });
-        Assert.That(syncThread, Is.EqualTo(uiThread));
-        var delegateThread = NewSignal();
-        var addThread = 0;
-        var started = 0;
-        ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) {
-                addThread = Environment.CurrentManagedThreadId;
-            }
-        };
-        await Task.Run(() => @operator.Operate("worker", (_, _) => {
-            Interlocked.Increment(ref started);
-            delegateThread.TrySetResult(Environment.CurrentManagedThreadId != uiThread);
-            return Task.CompletedTask;
-        })).WaitAsync(Timeout);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(await delegateThread.Task.WaitAsync(Timeout), Is.True);
-            Assert.That(addThread, Is.EqualTo(uiThread));
-            Assert.That(started, Is.EqualTo(1));
-        }
-    });
-
-    /// <summary>Verifies cancellation that completes descendants inline does not dispose sources prematurely.</summary>
-    /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public Task Cancel_WithInlineDescendantCompletion_CompletesWithoutError() => UiTestThread.Run(async () => {
-        IOperator @operator = new Operator();
-        var started = 0;
-        var allStarted = NewSignal();
-        static async Task WaitForCancel(CancellationToken token) {
-            var canceled = new TaskCompletionSource<bool>();
-            using (token.Register(() => canceled.TrySetResult(true))) {
-                await canceled.Task.ConfigureAwait(false);
-            }
-        }
-        /*
-         * Start from a worker so the delegates resume inline on the canceling thread.
-         */
-        await Task.Run(() => @operator.Operate("root", async (progress, token) => {
-            await progress.Children(Enumerable.Range(0, 3), index => new OperationChild($"child {index}",
-                async (childProgress, childToken) => {
-                    await childProgress.Child("grandchild", async (_, grandchildToken) => {
-                        if (Interlocked.Increment(ref started) == 3) {
-                            allStarted.TrySetResult(true);
-                        }
-                        await WaitForCancel(grandchildToken);
-                    }).ConfigureAwait(false);
-                    await WaitForCancel(childToken);
-                })).ConfigureAwait(false);
-            await WaitForCancel(token);
-        })).WaitAsync(Timeout);
-        var root = (Operation)@operator.Operations.Snapshot().Single();
-        await allStarted.Task.WaitAsync(Timeout);
-        Assert.DoesNotThrow(root.Cancel);
-        await root.Completion.WaitAsync(Timeout);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(root.Complete, Is.True);
-            Assert.That(root.Error, Is.Null);
-            Assert.That(root.CompleteWithError, Is.False);
-        }
-    });
-
-    /// <summary>Verifies that without a context concurrent reports keep ancestor totals consistent.</summary>
-    /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public Task Operate_WithoutContext_ConcurrentReportsRollUpConsistently() => Task.Run(async () => {
-        Assert.That(SynchronizationContext.Current, Is.Null);
-        IOperator @operator = new Operator();
-        Operation root = null;
-        ((INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source).CollectionChanged += (_, e) => {
-            if (e.Action == NotifyCollectionChangedAction.Add) {
-                root = (Operation)e.NewItems[0];
-            }
-        };
-        @operator.Operate("root", async (progress, _) => {
-            await progress.Children(Enumerable.Range(0, 4), index => new OperationChild($"child {index}",
-                (childProgress, _) => Task.Run(() => {
-                    for (var i = 0; i < 1000; i++) {
-                        childProgress.Change(addTarget: 1);
-                        childProgress.Change(addProgress: 1);
-                    }
-                }, CancellationToken.None)));
-        });
-        await root.Completion.WaitAsync(Timeout);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(root.Progress, Is.EqualTo(4000));
-            Assert.That(root.Target, Is.EqualTo(4000));
-        }
-    });
-
-    /// <summary>Verifies an absent context permits synchronous collection changes and worker child registration.</summary>
-    /// <returns>A task representing execution of the test.</returns>
-    [Test]
-    public Task Operate_WithoutContext_MutatesCollectionsOnCallingThread() => Task.Run(async () => {
+    public Task Operate_WithoutContext_SequentialCollectionChangesDrainSynchronously() => Task.Run(async () => {
         Assert.That(SynchronizationContext.Current, Is.Null);
         IOperator @operator = new Operator();
         var release = NewSignal();
@@ -460,25 +288,128 @@ public sealed class SynchronizationTests {
         }
     });
 
-    /// <summary>Verifies queued work still runs after an earlier queued item throws.</summary>
-    /// <returns>A task representing execution of the test.</returns>
+    /// <summary>
+    /// Verifies concurrent no-context producers queue projection on the active drainer thread.
+    /// </summary>
+    /// <returns>
+    /// A task representing execution of the test.
+    /// </returns>
     [Test]
-    public async Task QueuedWork_AfterThrowingItem_StillRuns() {
-        var manual = new ManualContext();
-        var context = new OperationContext(manual);
-        var ran = false;
-        await Task.Run(() => {
-            context.Invoke(() => throw new IOException("first"));
-            context.Invoke(() => ran = true);
+    public async Task Operate_WithoutContext_OverlappingProducersSerializeCollectionProjection() {
+        var @operator = await Task.Run(() => {
+            var previousContext = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try {
+                return (IOperator)new Operator();
+            }
+            finally {
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
         }).WaitAsync(Timeout);
-        Assert.That(manual.Queue.TryDequeue(out var first), Is.True);
-        Assert.Throws<IOException>(() => first.Callback(first.State));
-        Assert.That(ran, Is.False);
-        Assert.That(manual.Queue.TryDequeue(out var second), Is.True);
-        second.Callback(second.State);
-        using (Assert.EnterMultipleScope()) {
-            Assert.That(ran, Is.True);
-            Assert.That(manual.Queue, Is.Empty);
+        var collection = (OperationCollection)@operator.Operations;
+        var finish = NewSignal();
+        var firstEventEntered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstEvent = NewSignal();
+        var secondEventDelivered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstProducerReturned = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondProducerReturned =
+            new TaskCompletionSource<(int Thread, string[] CoreNames, string[] ObservableNames)>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+        var changes = new ConcurrentQueue<(NotifyCollectionChangedAction Action, string Name, int Thread)>();
+        var source = (INotifyCollectionChanged)collection.Source;
+        source.CollectionChanged += (_, e) => {
+            var item = (Operation)(e.NewItems ?? e.OldItems)[0];
+            var thread = Environment.CurrentManagedThreadId;
+            changes.Enqueue((e.Action, item.Name, thread));
+            if (e.Action == NotifyCollectionChangedAction.Add && item.Name == "first") {
+                firstEventEntered.TrySetResult(thread);
+                releaseFirstEvent.Task.GetAwaiter().GetResult();
+            }
+            if (e.Action == NotifyCollectionChangedAction.Add && item.Name == "second") {
+                secondEventDelivered.TrySetResult(thread);
+            }
+        };
+        var firstProducer = new Thread(() => {
+            SynchronizationContext.SetSynchronizationContext(null);
+            var thread = Environment.CurrentManagedThreadId;
+            try {
+                @operator.Operate("first", async (_, _) => await finish.Task.ConfigureAwait(false));
+                firstProducerReturned.TrySetResult(thread);
+            }
+            catch (Exception exception) {
+                firstProducerReturned.TrySetException(exception);
+            }
+        }) {
+            IsBackground = true,
+            Name = "First collection producer"
+        };
+        var secondProducer = new Thread(() => {
+            SynchronizationContext.SetSynchronizationContext(null);
+            var thread = Environment.CurrentManagedThreadId;
+            try {
+                @operator.Operate("second", async (_, _) => await finish.Task.ConfigureAwait(false));
+                var coreNames = @operator.Operations.Snapshot()
+                    .Select(operation => ((Operation)operation).Name)
+                    .ToArray();
+                var observableNames = ((IEnumerable)collection.Source).Cast<Operation>()
+                    .Select(operation => operation.Name)
+                    .ToArray();
+                secondProducerReturned.TrySetResult((thread, coreNames, observableNames));
+            }
+            catch (Exception exception) {
+                secondProducerReturned.TrySetException(exception);
+            }
+        }) {
+            IsBackground = true,
+            Name = "Second collection producer"
+        };
+
+        try {
+            firstProducer.Start();
+            var drainerThread = await firstEventEntered.Task.WaitAsync(Timeout);
+            secondProducer.Start();
+            var secondResult = await secondProducerReturned.Task.WaitAsync(Timeout);
+            var changesBeforeRelease = changes.ToArray();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(secondResult.Thread, Is.Not.EqualTo(drainerThread));
+                Assert.That(secondResult.CoreNames, Is.EquivalentTo(new[] { "first", "second" }));
+                Assert.That(secondResult.ObservableNames, Is.EqualTo(new[] { "first" }));
+                Assert.That(changesBeforeRelease.Select(change => change.Name), Is.EqualTo(new[] { "first" }));
+            }
+
+            releaseFirstEvent.TrySetResult(true);
+            var secondEventThread = await secondEventDelivered.Task.WaitAsync(Timeout);
+            var firstReturnThread = await firstProducerReturned.Task.WaitAsync(Timeout);
+            var additions = changes.Where(change => change.Action == NotifyCollectionChangedAction.Add).ToArray();
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(firstReturnThread, Is.EqualTo(drainerThread));
+                Assert.That(additions.Select(change => change.Name), Is.EqualTo(new[] { "first", "second" }));
+                Assert.That(additions.All(change => change.Thread == drainerThread), Is.True);
+                Assert.That(secondEventThread, Is.EqualTo(drainerThread));
+                Assert.That(secondEventThread, Is.Not.EqualTo(secondResult.Thread));
+            }
+
+            var completions = @operator.Operations.Snapshot()
+                .Select(operation => ((Operation)operation).Completion)
+                .ToArray();
+            finish.TrySetResult(true);
+            await Task.WhenAll(completions).WaitAsync(Timeout);
+        }
+        finally {
+            releaseFirstEvent.TrySetResult(true);
+            finish.TrySetResult(true);
+            if (firstProducer.IsAlive) {
+                Assert.That(
+                    firstProducer.Join(Timeout),
+                    Is.True,
+                    "The first producer should exit within the timeout.");
+            }
+            if (secondProducer.IsAlive) {
+                Assert.That(
+                    secondProducer.Join(Timeout),
+                    Is.True,
+                    "The second producer should exit within the timeout.");
+            }
         }
     }
 }

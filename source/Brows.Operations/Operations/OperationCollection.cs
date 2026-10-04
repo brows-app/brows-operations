@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading;
 
 namespace Brows.Operations;
 
@@ -15,79 +14,59 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
     private static readonly PropertyChangedEventArgs RelevanceEvent = new(nameof(Relevance));
     private static readonly PropertyChangedEventArgs[] RelevanceDependents = [RelevantEvent];
 
-    private readonly ObservableCollection<Operation> Collection = [];
+    private readonly List<Operation> Core = [];
+    private readonly ObservableCollection<Operation> Observable = [];
+    private readonly ReadOnlyObservableCollection<Operation> ObservableSource;
+    private readonly OperationSynchronization OperationSync;
+    private int Relevance;
 
-    private int Relevance {
-        get;
-        set => Change(ref field, value, RelevanceEvent, RelevanceDependents);
-    }
-
-    private void Item_RelevantChanged(object sender, EventArgs e) {
-        var item = sender as Operation;
-        if (item != null) {
-            if (item.Relevant) {
-                Relevance++;
-            }
-            else {
-                Relevance--;
-            }
+    private void Item_RelevantCommitted(object sender, EventArgs e) {
+        if (sender is Operation item) {
+            OperationSync.Update(() => {
+                Relevance += item.Relevant ? 1 : -1;
+                NotifyPropertyChanged(RelevanceEvent, RelevanceDependents);
+            });
         }
     }
 
-    private IReadOnlyList<IOperation> Snapshot() {
-        lock (Collection) {
-            return [.. Collection];
-        }
+    private Operation[] SnapshotCore() =>
+        OperationSync.Read(() => Core.ToArray());
+
+    protected override void OnPropertyChanged(PropertyChangedEventArgs e) {
+        OperationSync.Notify(() => base.OnPropertyChanged(e));
     }
 
-    private bool RemoveCore(Operation item) {
-        if (item.Complete != true) {
-            return false;
-        }
-        bool removed;
-        lock (Collection) {
-            removed = Collection.Remove(item);
-        }
-        if (removed) {
-            if (item.Relevant) {
-                Relevance--;
-            }
-            NotifyPropertyChanged(CountEvent);
-        }
-        item.RelevantChanged -= Item_RelevantChanged;
-        return removed;
-    }
+    public bool Relevant =>
+        OperationSync.Read(() => Relevance > 0);
 
-    public OperationContext Context { get; }
-    public bool Relevant => Relevance > 0;
-    public int Count {
-        get {
-            lock (Collection) {
-                return Collection.Count;
-            }
-        }
-    }
-    public IEnumerable Source => field ??= new ReadOnlyObservableCollection<Operation>(Collection);
+    public int Count =>
+        OperationSync.Read(() => Core.Count);
 
-    public OperationCollection() : this(new OperationContext(SynchronizationContext.Current)) {
-    }
+    public IEnumerable Source =>
+        ObservableSource;
 
-    public OperationCollection(OperationContext context) {
-        Context = context ?? throw new ArgumentNullException(nameof(context));
+    public OperationSynchronization Synchronization =>
+        OperationSync;
+
+    public OperationCollection(OperationSynchronization synchronization = null) {
+        OperationSync = synchronization ?? new OperationSynchronization(
+            System.Threading.SynchronizationContext.Current);
+        ObservableSource = new ReadOnlyObservableCollection<Operation>(Observable);
     }
 
     public void Add(Operation item) {
         if (item is null) throw new ArgumentNullException(nameof(item));
-        if (item.Context != Context) {
-            throw new ArgumentException(paramName: nameof(item), message: "Operation context mismatch.");
-        }
-        Context.Invoke(() => {
+        var relevanceChanged = false;
+        OperationSync.Update(() => {
+            Core.Add(item);
             if (item.Relevant) {
                 Relevance++;
+                relevanceChanged = true;
             }
-            item.RelevantChanged += Item_RelevantChanged;
-            lock (Collection) {
-                Collection.Add(item);
+            item.RelevantCommitted += Item_RelevantCommitted;
+        }, () => Observable.Add(item), () => {
+            if (relevanceChanged) {
+                NotifyPropertyChanged(RelevanceEvent, RelevanceDependents);
             }
             NotifyPropertyChanged(CountEvent);
         });
@@ -97,16 +76,40 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         if (item is null) {
             return false;
         }
-        return Context.Send(() => RemoveCore(item));
+        var removed = false;
+        var relevanceChanged = false;
+        OperationSync.Update(() => {
+            if (!item.Complete) {
+                return;
+            }
+            removed = Core.Remove(item);
+            if (removed) {
+                if (item.Relevant) {
+                    Relevance--;
+                    relevanceChanged = true;
+                }
+                item.RelevantCommitted -= Item_RelevantCommitted;
+            }
+        }, () => {
+            if (removed) {
+                Observable.Remove(item);
+            }
+        }, () => {
+            if (removed) {
+                if (relevanceChanged) {
+                    NotifyPropertyChanged(RelevanceEvent, RelevanceDependents);
+                }
+                NotifyPropertyChanged(CountEvent);
+            }
+        });
+        return removed;
     }
 
-    IReadOnlyList<IOperation> IOperationCollection.Snapshot() {
-        return Snapshot();
-    }
+    IReadOnlyList<IOperation> IOperationCollection.Snapshot() =>
+        SnapshotCore();
 
-    bool IOperationCollection.Remove(IOperation item) {
-        return Remove(item as Operation);
-    }
+    bool IOperationCollection.Remove(IOperation item) =>
+        Remove(item as Operation);
 
     int IOperationCollection.RemoveComplete(bool? withError) {
         Func<IOperation, bool> predicate = withError switch {
@@ -114,15 +117,12 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             false => i => i.Complete && !i.CompleteWithError,
             _ => i => i.Complete
         };
-        return Context.Send(() => {
-            var itemsRemoved = 0;
-            var itemsToRemove = Snapshot().Where(predicate).ToList();
-            foreach (var item in itemsToRemove) {
-                if (RemoveCore((Operation)item)) {
-                    itemsRemoved++;
-                }
+        var removed = 0;
+        foreach (var item in SnapshotCore().Where(item => predicate(item))) {
+            if (Remove(item)) {
+                removed++;
             }
-            return itemsRemoved;
-        });
+        }
+        return removed;
     }
 }

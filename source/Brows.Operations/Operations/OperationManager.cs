@@ -1,4 +1,4 @@
-﻿using System.Threading.Tasks;
+﻿using System;
 
 namespace Brows.Operations;
 
@@ -34,8 +34,7 @@ internal sealed class OperationManager {
     }
 
     private Operation Operation(string name, OperationDelegate task) {
-        var
-        operation = new Operation(name, task, Operations.Context);
+        var operation = new Operation(name, task, Operations.Synchronization);
         operation.Completed += Operation_Completed;
         operation.Removed += Operation_Removed;
         return operation;
@@ -49,26 +48,11 @@ internal sealed class OperationManager {
         Operations = operations ?? throw new ArgumentNullException(nameof(operations));
     }
 
-    public void Operate(string name, OperationDelegate task) {
+    public void Operate(string name, OperationDelegate task, Action<Operation> beforeStart = null) {
         var
         operation = Operation(name, task);
-        var context = Operations.Context;
-        if (context.IsCurrent) {
-            context.Invoke(() => {
-                Operations.Add(operation);
-                operation.Prepare();
-            });
-            operation.Start();
-        }
-        else {
-            /*
-             * Register on the operator's context, then keep the delegate off that context.
-             */
-            context.Invoke(() => {
-                Operations.Add(operation);
-                operation.Prepare();
-                Task.Run(operation.Start);
-            });
-        }
+        Operations.Add(operation);
+        beforeStart?.Invoke(operation);
+        operation.Start();
     }
 }

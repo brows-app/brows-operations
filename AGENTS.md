@@ -32,8 +32,12 @@ For a standard .NET solution, run these commands from the repository root:
 ```powershell
 dotnet restore
 dotnet build --no-restore --configuration Release
-dotnet test --no-restore --configuration Release --no-build --verbosity normal
+dotnet test --no-build --no-restore --configuration Release
+dotnet pack --no-build --no-restore --configuration Release
 ```
+
+Pack only projects that produce packages. For focused work, build or test the
+affected project and target framework before running broader validation.
 
 For focused iteration, select the affected test project and target framework.
 Use test filters to run the relevant fixture or test when supported by the
@@ -51,7 +55,8 @@ Use `--no-build` only when the binaries include the latest code changes.
 
 ## Code and project conventions
 
-- Follow `.editorconfig`: LF line endings; four spaces for C#; two spaces for
+- Follow `.editorconfig`, shared build settings, and the conventions used by
+  nearby code. LF line endings; four spaces for C#; two spaces for
   project XML, XAML, JSON, and Markdown. C# and project/XAML files use UTF-8 with
   BOM; Markdown uses UTF-8 without BOM. Keep lines to 120 characters or fewer.
 - Use file-scoped namespaces and opening braces on the same line. Prefer 'var'
@@ -68,6 +73,9 @@ Use `--no-build` only when the binaries include the latest code changes.
   Keep dependency changes focused on the task.
 - Do not add to the public API unless explicitly instructed to do so. Keep new
   types and members internal or private when the requested change permits it.
+- Prefer immutable types. When state mutation is required, keep it private.
+  Prefer read-only properties supplied through constructors and init-only
+  properties. Pure data objects should be `record` types.
 - Declare classes either `sealed` or `abstract`. Avoid concrete classes that
   can be extended.
 - Put each type in a separate file named after the type (for example,

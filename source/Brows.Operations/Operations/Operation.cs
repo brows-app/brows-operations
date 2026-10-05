@@ -5,6 +5,10 @@ using System.Threading;
 namespace Brows.Operations;
 
 internal sealed class Operation : OperationBase {
+    internal void OnRemovedFromCollection() {
+        RemovedFromCollection?.Invoke(this, EventArgs.Empty);
+    }
+
     protected sealed override void PublishPropertyChanged(PropertyChangedEventArgs e) {
         base.PublishPropertyChanged(e);
         if (e?.PropertyName is nameof(Complete)) {
@@ -18,6 +22,7 @@ internal sealed class Operation : OperationBase {
     }
 
     public event EventHandler Removed;
+    public event EventHandler RemovedFromCollection;
     public event EventHandler CanCancelChanged;
     public event EventHandler CanRemoveChanged;
 

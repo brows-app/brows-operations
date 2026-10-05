@@ -3,18 +3,27 @@
 namespace Brows.Operations;
 
 internal sealed class OperationManager {
+    private void Detach(Operation operation) {
+        operation.Removed -= Operation_Removed;
+        operation.RemovedFromCollection -= Operation_RemovedFromCollection;
+    }
+
     private void Remove(Operation operation) {
         if (operation is null) {
             throw new ArgumentNullException(nameof(operation));
         }
-        if (Operations.Remove(operation)) {
-            operation.Removed -= Operation_Removed;
-        }
+        Operations.Remove(operation);
     }
 
     private void Operation_Removed(object sender, EventArgs e) {
         if (sender is Operation operation) {
             Remove(operation);
+        }
+    }
+
+    private void Operation_RemovedFromCollection(object sender, EventArgs e) {
+        if (sender is Operation operation) {
+            Detach(operation);
         }
     }
 
@@ -37,6 +46,7 @@ internal sealed class OperationManager {
         var operation = new Operation(name, task, Operations.Synchronization);
         operation.Completed += Operation_Completed;
         operation.Removed += Operation_Removed;
+        operation.RemovedFromCollection += Operation_RemovedFromCollection;
         return operation;
     }
 

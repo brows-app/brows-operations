@@ -177,6 +177,34 @@ public sealed class OperatorTests {
             return Task.CompletedTask;
         });
 
+    /// <summary>Verifies that public removal detaches the operation manager from the Removed event.</summary>
+    /// <param name="removeComplete">
+    /// Whether to remove the root through <see cref="IOperationCollection.RemoveComplete"/>.
+    /// </param>
+    /// <returns>A task representing execution of the test.</returns>
+    [TestCase(false)]
+    [TestCase(true)]
+    public Task CollectionRemoval_DetachesTheManagerSubscription(bool removeComplete) =>
+        UiTestThread.Run(() => {
+            var @operator = CreateOperator();
+            @operator.Operate("failure", (_, _) => Task.FromException(new IOException("failure")));
+            var root = (Operation)@operator.Operations.Snapshot().Single();
+
+            var removed = removeComplete
+                ? @operator.Operations.RemoveComplete(withError: true) == 1
+                : @operator.Operations.Remove(root);
+            Assert.That(removed, Is.True);
+
+            var handlers = (MulticastDelegate)typeof(Operation)
+                .GetField(nameof(Operation.Removed), BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(root);
+            var retainsManager = handlers?.GetInvocationList()
+                .Any(handler => handler.Target is OperationManager) ?? false;
+
+            Assert.That(retainsManager, Is.False);
+            return Task.CompletedTask;
+        });
+
     /// <summary>Verifies that collection removal rejects an operation owned by a different collection.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]

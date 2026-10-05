@@ -89,6 +89,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
                     relevanceChanged = true;
                 }
                 item.RelevantCommitted -= Item_RelevantCommitted;
+                item.OnRemovedFromCollection();
             }
         }, () => {
             if (removed) {

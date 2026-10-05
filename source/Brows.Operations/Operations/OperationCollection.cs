@@ -18,6 +18,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
     private readonly ObservableCollection<Operation> Observable = [];
     private readonly ReadOnlyObservableCollection<Operation> ObservableSource;
     private readonly OperationSynchronization OperationSync;
+
     private int Relevance;
 
     private void Item_RelevantCommitted(object sender, EventArgs e) {

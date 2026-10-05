@@ -5,10 +5,6 @@ using System.Threading;
 namespace Brows.Operations;
 
 internal sealed class Operation : OperationBase {
-    internal void OnRemovedFromCollection() {
-        RemovedFromCollection?.Invoke(this, EventArgs.Empty);
-    }
-
     protected sealed override void PublishPropertyChanged(PropertyChangedEventArgs e) {
         base.PublishPropertyChanged(e);
         if (e?.PropertyName is nameof(Complete)) {
@@ -37,11 +33,15 @@ internal sealed class Operation : OperationBase {
         Removed?.Invoke(this, EventArgs.Empty);
     }
 
+    public void OnRemovedFromCollection() {
+        RemovedFromCollection?.Invoke(this, EventArgs.Empty);
+    }
+
     public Operation(string name, OperationDelegate task, SynchronizationContext synchronizationContext = null)
     : this(name, task, new OperationSynchronization(synchronizationContext ?? SynchronizationContext.Current)) {
     }
 
-    internal Operation(string name, OperationDelegate task, OperationSynchronization synchronization)
+    public Operation(string name, OperationDelegate task, OperationSynchronization synchronization)
     : base(name, null, task, synchronization) {
     }
 }

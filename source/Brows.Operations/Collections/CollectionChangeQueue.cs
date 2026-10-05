@@ -2,12 +2,19 @@
 using System.Collections.Generic;
 using System.Threading;
 
-namespace Brows.Operations;
+namespace Brows.Collections;
 
 internal sealed class CollectionChangeQueue {
-    private readonly object Gate = new();
     private readonly Queue<Action> Changes = new();
     private readonly SynchronizationContext SynchronizationContext;
+    private readonly
+#if NET9_0_OR_GREATER
+        Lock
+#else
+        object
+#endif
+        Gate = new();
+
     private bool Scheduled;
 
     private void Drain() {
@@ -62,7 +69,7 @@ internal sealed class CollectionChangeQueue {
         if (change is null) throw new ArgumentNullException(nameof(change));
         lock (Gate) {
             Changes.Enqueue(change);
-            if (!Scheduled) {
+            if (Scheduled != true) {
                 Scheduled = true;
                 return true;
             }

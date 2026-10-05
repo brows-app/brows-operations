@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Brows.Collections;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -8,8 +9,14 @@ internal sealed class OperationSynchronization {
     [ThreadStatic]
     private static Queue<(Action Callback, bool Required)> Notifications;
 
-    private readonly object Gate = new();
     private readonly CollectionChangeQueue CollectionChanges;
+    private readonly
+#if NET9_0_OR_GREATER
+        Lock
+#else
+        object
+#endif
+        Gate = new();
 
     private static void DrainNotifications(Queue<(Action Callback, bool Required)> notifications,
                                            bool requiredOnly = false) {

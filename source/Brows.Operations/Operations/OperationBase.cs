@@ -13,12 +13,6 @@ using TASK = System.Threading.Tasks.Task;
 namespace Brows.Operations;
 
 internal class OperationBase : Notifier, IOperation {
-    private sealed class ProgressChangeContext {
-        public Queue<(OperationBase Operation, bool Target, bool Progress)> Notifications { get; } = [];
-        public int Depth { get; set; }
-        public bool Dispatching { get; set; }
-    }
-
     private static readonly ILog Log = Logging.For(typeof(OperationBase));
     private static readonly PropertyChangedEventArgs CancelingEvent = new(nameof(Canceling));
     private static readonly PropertyChangedEventArgs CompleteEvent = new(nameof(Complete));
@@ -44,25 +38,11 @@ internal class OperationBase : Notifier, IOperation {
     private bool TokenSourceDisposalPending;
     private Stopwatch Stopwatch;
     private CancellationTokenSource TokenSource;
-    private long TargetValue;
-    private long ProgressValue;
-    private double ProgressPercentValue;
-    private string TargetStringValue;
-    private string ProgressStringValue;
-    private string NameValue;
-    private string DataValue;
-    private bool RelevantValue;
-    private bool CancelingValue;
-    private Exception ErrorValue;
-    private bool ProgressingValue;
-    private string DepthStringValue;
-    private bool CompleteWithErrorValue;
-    private bool CompleteValue;
-    private readonly TaskCompletionSource<bool> CompletionSource =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly OperationSynchronization Synchronization;
     private readonly ProgressChangeContext ProgressChange;
     private readonly OperationBaseCollection ChildCollection;
+    private readonly TaskCompletionSource<bool> CompletionSource =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private void ReleaseTokenSourceCancellation(CancellationTokenSource tokenSource) {
         Synchronization.Update(() => {
@@ -268,7 +248,7 @@ internal class OperationBase : Notifier, IOperation {
         }
     }
 
-    private async Task Operate() {
+    private async TASK Operate() {
         if (Log.Info()) {
             Log.Info(nameof(Operate));
         }
@@ -444,45 +424,47 @@ internal class OperationBase : Notifier, IOperation {
     public event EventHandler TargetChanged;
 
     public long Target {
-        get => Synchronization.Read(() => TargetValue);
-        private set => Synchronization.Update(() => TargetValue = value);
+        get => Synchronization.Read(() => _Target);
+        private set => Synchronization.Update(() => _Target = value);
     }
+    private long _Target;
 
     public long Progress {
-        get => Synchronization.Read(() => ProgressValue);
-        private set => Synchronization.Update(() => ProgressValue = value);
+        get => Synchronization.Read(() => _Progress);
+        private set => Synchronization.Update(() => _Progress = value);
     }
+    private long _Progress;
 
     public double ProgressPercent {
-        get => Synchronization.Read(() => ProgressPercentValue);
-        private set => Synchronization.Update(() => ProgressPercentValue = value);
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => field = value);
     }
 
     public string TargetString {
-        get => Synchronization.Read(() => TargetStringValue ?? TargetValue.ToString());
-        private set => Synchronization.Update(() => Change(ref TargetStringValue, value, TargetStringEvent));
+        get => Synchronization.Read(() => field ?? _Target.ToString());
+        private set => Synchronization.Update(() => Change(ref field, value, TargetStringEvent));
     }
 
     public string ProgressString {
-        get => Synchronization.Read(() => ProgressStringValue ?? ProgressValue.ToString());
-        private set => Synchronization.Update(() => Change(ref ProgressStringValue, value, ProgressStringEvent));
+        get => Synchronization.Read(() => field ?? _Progress.ToString());
+        private set => Synchronization.Update(() => Change(ref field, value, ProgressStringEvent));
     }
 
     public string Name {
-        get => Synchronization.Read(() => NameValue);
-        private set => Synchronization.Update(() => Change(ref NameValue, value, NameEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, NameEvent));
     }
 
     public string Data {
-        get => Synchronization.Read(() => DataValue);
-        private set => Synchronization.Update(() => Change(ref DataValue, value, DataEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, DataEvent));
     }
 
     public bool Relevant {
-        get => Synchronization.Read(() => RelevantValue);
+        get => Synchronization.Read(() => field);
         private set {
             Synchronization.Update(() => {
-                if (Change(ref RelevantValue, value, RelevantEvent)) {
+                if (Change(ref field, value, RelevantEvent)) {
                     if (value && Parent is not null) {
                         Parent.Relevant = true;
                     }
@@ -497,18 +479,18 @@ internal class OperationBase : Notifier, IOperation {
     }
 
     public bool Canceling {
-        get => Synchronization.Read(() => CancelingValue);
-        private set => Synchronization.Update(() => Change(ref CancelingValue, value, CancelingEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, CancelingEvent));
     }
 
     public Exception Error {
-        get => Synchronization.Read(() => ErrorValue);
-        private set => Synchronization.Update(() => Change(ref ErrorValue, value, ErrorEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, ErrorEvent));
     }
 
     public bool Progressing {
-        get => Synchronization.Read(() => ProgressingValue);
-        private set => Synchronization.Update(() => Change(ref ProgressingValue, value, ProgressingEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, ProgressingEvent));
     }
 
     public object ChildSource => ChildCollection.Source;
@@ -516,19 +498,19 @@ internal class OperationBase : Notifier, IOperation {
     public int Depth { get; }
 
     public string DepthString =>
-        Synchronization.Update(() => DepthStringValue ??= new string('>', Depth));
+        Synchronization.Update(() => field ??= new string('>', Depth));
 
     public bool CompleteWithError {
-        get => Synchronization.Read(() => CompleteWithErrorValue);
-        private set => Synchronization.Update(() => Change(ref CompleteWithErrorValue, value, CompleteWithErrorEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, CompleteWithErrorEvent));
     }
 
     public bool Complete {
-        get => Synchronization.Read(() => CompleteValue);
-        private set => Synchronization.Update(() => Change(ref CompleteValue, value, CompleteEvent));
+        get => Synchronization.Read(() => field);
+        private set => Synchronization.Update(() => Change(ref field, value, CompleteEvent));
     }
 
-    public Task Completion =>
+    public TASK Completion =>
         CompletionSource.Task;
     public OperationBase Parent { get; }
     public OperationDelegate Task { get; }
@@ -612,5 +594,11 @@ internal class OperationBase : Notifier, IOperation {
             await TASK.WhenAll(tasks);
             return true;
         }
+    }
+
+    private sealed class ProgressChangeContext {
+        public Queue<(OperationBase Operation, bool Target, bool Progress)> Notifications { get; } = [];
+        public int Depth { get; set; }
+        public bool Dispatching { get; set; }
     }
 }

@@ -14,7 +14,8 @@ internal sealed class Operator : IOperator {
     }
 
     public void Operate(string name, OperationDelegate task) {
-        var manager = new OperationManager(OperationCollection);
+        var
+        manager = new OperationManager(OperationCollection);
         manager.Operate(name, task);
     }
 }

@@ -44,6 +44,19 @@ void StartCopy(IOperatorFactory operatorFactory) {
 
 `Change` supports adding or setting progress and target values, as well as updating the operation name, detail text, and display strings. Child progress and targets roll up to their parents. `Child` creates one child task; `Children` creates and awaits a set of children.
 
+For byte-valued progress, pass `kind: OperationProgressKind.FileSize` to display values using B, KiB, MiB, and
+larger binary units:
+
+```csharp
+progress.Change(setProgress: bytesCopied,
+                setTarget: totalBytes,
+                kind: OperationProgressKind.FileSize);
+```
+
+`progressStringFormat` and `targetStringFormat` customize the numeric portion of scaled values; counts below
+1 KiB remain whole bytes. `formatProvider` selects the number-formatting culture; null leaves each existing
+setting unchanged.
+
 Successful root operations are removed from the collection when they finish. Failed operations remain available with their error state until removed. The WPF control displays relevant operations and their child hierarchy.
 
 ## UI scheduling

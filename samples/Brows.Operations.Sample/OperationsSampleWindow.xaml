@@ -37,7 +37,8 @@
         <TextBlock Text="WPF SAMPLE" HorizontalAlignment="Right" FontSize="10"
                    Foreground="{StaticResource MutedBrush}" Margin="0,0,0,10"/>
         <Button x:Name="ShowcaseButton" Style="{StaticResource PrimaryButtonStyle}" IsEnabled="False"
-                Click="RunShowcase_Click" ToolTip="Start nested work, a cancellable task, and a child failure together.">
+                Click="RunShowcase_Click"
+                ToolTip="Start nested work, a file copy, a cancellable task, and a child failure together.">
           <StackPanel Orientation="Horizontal">
             <TextBlock Text="&#x25B6;" FontSize="10" VerticalAlignment="Center" Margin="0,0,10,0"/>
             <TextBlock Text="Run showcase"/>
@@ -72,6 +73,7 @@
           <TextBlock Text="Live updates and cooperative cancellation." FontSize="12" Foreground="{StaticResource MutedBrush}"/>
           <WrapPanel>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Set &amp; add" Click="RunProgressUpdates_Click"/>
+            <Button Style="{StaticResource ScenarioButtonStyle}" Content="File sizes" Click="RunFileSizes_Click"/>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Cancel a task" Click="RunCancellable_Click"/>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Successful task" Click="RunSuccess_Click"/>
           </WrapPanel>

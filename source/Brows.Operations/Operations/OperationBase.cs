@@ -24,9 +24,13 @@ internal class OperationBase : Notifier, IOperation {
     private static readonly PropertyChangedEventArgs ProgressingEvent = new(nameof(Progressing));
     private static readonly PropertyChangedEventArgs ProgressPercentEvent = new(nameof(ProgressPercent));
     private static readonly PropertyChangedEventArgs ProgressStringEvent = new(nameof(ProgressString));
+    private static readonly PropertyChangedEventArgs ProgressStringFormatEvent = new(nameof(ProgressStringFormat));
+    private static readonly PropertyChangedEventArgs ProgressKindEvent = new(nameof(ProgressKind));
     private static readonly PropertyChangedEventArgs RelevantEvent = new(nameof(Relevant));
     private static readonly PropertyChangedEventArgs TargetEvent = new(nameof(Target));
     private static readonly PropertyChangedEventArgs TargetStringEvent = new(nameof(TargetString));
+    private static readonly PropertyChangedEventArgs TargetStringFormatEvent = new(nameof(TargetStringFormat));
+    private static readonly PropertyChangedEventArgs FormatProviderEvent = new(nameof(FormatProvider));
     private static readonly PropertyChangedEventArgs[] ProgressDependents = [ProgressPercentEvent, ProgressStringEvent];
     private static readonly PropertyChangedEventArgs[] TargetDependents = [ProgressPercentEvent, TargetStringEvent];
 
@@ -440,25 +444,58 @@ internal class OperationBase : Notifier, IOperation {
         private set => Synchronization.Update(() => field = value);
     }
 
-    public string TargetString {
-        get => Synchronization.Read(() => field ?? _Target.ToString());
-        private set => Synchronization.Update(() => Change(ref field, value, TargetStringEvent));
+    public OperationProgressKind ProgressKind {
+        get => Synchronization.Read(() => _ProgressKind);
     }
+    private OperationProgressKind _ProgressKind;
+
+    public string TargetString {
+        get => Synchronization.Read(() => _TargetString ?? _ProgressKind switch {
+            OperationProgressKind.FileSize =>
+                OperationFileSize.ToString(_Target,
+                                           _TargetStringFormat,
+                                           _FormatProvider),
+            _ => _Target.ToString()
+        });
+    }
+    private string _TargetString;
+
+    public string TargetStringFormat {
+        get => Synchronization.Read(() => _TargetStringFormat);
+    }
+    private string _TargetStringFormat;
 
     public string ProgressString {
-        get => Synchronization.Read(() => field ?? _Progress.ToString());
-        private set => Synchronization.Update(() => Change(ref field, value, ProgressStringEvent));
+        get => Synchronization.Read(() => _ProgressString ?? _ProgressKind switch {
+            OperationProgressKind.FileSize =>
+                OperationFileSize.ToString(_Progress,
+                                           _ProgressStringFormat,
+                                           _FormatProvider),
+            _ => _Progress.ToString()
+        });
     }
+    private string _ProgressString;
+
+    public string ProgressStringFormat {
+        get => Synchronization.Read(() => _ProgressStringFormat);
+    }
+    private string _ProgressStringFormat;
+
+    public IFormatProvider FormatProvider {
+        get => Synchronization.Read(() => _FormatProvider);
+    }
+    private IFormatProvider _FormatProvider;
 
     public string Name {
-        get => Synchronization.Read(() => field);
-        private set => Synchronization.Update(() => Change(ref field, value, NameEvent));
+        get => Synchronization.Read(() => _Name);
+        private set => Synchronization.Update(() => Change(ref _Name, value, NameEvent));
     }
+    private string _Name;
 
     public string Data {
-        get => Synchronization.Read(() => field);
-        private set => Synchronization.Update(() => Change(ref field, value, DataEvent));
+        get => Synchronization.Read(() => _Data);
     }
+    private string _Data;
 
     public bool Relevant {
         get => Synchronization.Read(() => field);
@@ -550,20 +587,66 @@ internal class OperationBase : Notifier, IOperation {
                            string progressString,
                            string targetString,
                            string name,
-                           string data) {
+                           string data,
+                           OperationProgressKind? kind,
+                           string progressStringFormat,
+                           string targetStringFormat,
+                           IFormatProvider formatProvider) {
             Operation.Synchronization.Update(() => {
                 if (name is not null) {
-                    Operation.Name = name;
+                    Operation.Change(ref Operation._Name, name, NameEvent);
                 }
                 if (data is not null) {
-                    Operation.Data = data;
+                    Operation.Change(ref Operation._Data, data, DataEvent);
                 }
+                var kindChanged = false;
+                if (kind.HasValue) {
+                    kindChanged = Operation.Change(
+                        ref Operation._ProgressKind, kind.Value, ProgressKindEvent);
+                }
+                var progressStringFormatChanged = false;
+                if (progressStringFormat is not null) {
+                    progressStringFormatChanged = Operation.Change(
+                        ref Operation._ProgressStringFormat, progressStringFormat, ProgressStringFormatEvent);
+                }
+                var targetStringFormatChanged = false;
+                if (targetStringFormat is not null) {
+                    targetStringFormatChanged = Operation.Change(
+                        ref Operation._TargetStringFormat, targetStringFormat, TargetStringFormatEvent);
+                }
+                var formatProviderChanged = false;
+                if (formatProvider is not null && !ReferenceEquals(Operation._FormatProvider, formatProvider)) {
+                    formatProviderChanged = true;
+                    Operation._FormatProvider = formatProvider;
+                    Operation.NotifyPropertyChanged(FormatProviderEvent);
+                }
+                var notNone = Operation._ProgressKind != OperationProgressKind.None;
+                var progressDisplayFormatChanged =
+                    kindChanged || (notNone && (progressStringFormatChanged || formatProviderChanged));
+                var targetDisplayFormatChanged =
+                    kindChanged || (notNone && (targetStringFormatChanged || formatProviderChanged));
+                var progressUsesDefault = Operation._ProgressString is null && progressString is null;
+                var targetUsesDefault = Operation._TargetString is null && targetString is null;
                 Operation.ChangeProgress(addProgress: addProgress,
                                          setProgress: setProgress,
                                          addTarget: addTarget,
                                          setTarget: setTarget);
-                Operation.ProgressString = progressString;
-                Operation.TargetString = targetString;
+                Operation.Change(ref Operation._ProgressString, progressString, ProgressStringEvent);
+                Operation.Change(ref Operation._TargetString, targetString, TargetStringEvent);
+                var notifyProgressStringChanged = progressDisplayFormatChanged &&
+                                                  progressUsesDefault &&
+                                                  !setProgress.HasValue &&
+                                                  !addProgress.HasValue;
+                if (notifyProgressStringChanged) {
+                    Operation.NotifyPropertyChanged(ProgressStringEvent);
+                }
+                var notifyTargetStringChanged = targetDisplayFormatChanged &&
+                                                targetUsesDefault &&
+                                                !setTarget.HasValue &&
+                                                !addTarget.HasValue;
+                if (notifyTargetStringChanged) {
+                    Operation.NotifyPropertyChanged(TargetStringEvent);
+                }
             });
         }
 

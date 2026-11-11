@@ -12,7 +12,7 @@ namespace Brows.Operations;
 
 /// <summary>Tests context capture and collection mutations from worker continuations.</summary>
 [TestFixture]
-public sealed class SynchronizationTests {
+internal sealed class SynchronizationTests {
     private sealed class QueuedSynchronizationContext : SynchronizationContext {
         private readonly ConcurrentQueue<(SendOrPostCallback Callback, object State)> Queue = new();
 
@@ -107,62 +107,62 @@ public sealed class SynchronizationTests {
     [Test]
     public Task Operate_UsesContextCapturedAtCreationForDescendantCollections() =>
         UiTestThread.Run(async () => {
-                var context = SynchronizationContext.Current;
-                var uiThread = Environment.CurrentManagedThreadId;
-                IOperator @operator = new Operator(context);
-                var release = NewSignal();
-                var collectionChanges = NewSignal();
-                var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
-                Operation root = null;
-                void Subscribe(OperationBase parent) {
-                    ((INotifyCollectionChanged)parent.ChildSource).CollectionChanged += (_, e) => {
-                        var child = (OperationBase)e.NewItems[0];
-                        mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
-                        if (mutations.Count == 6) {
-                            collectionChanges.TrySetResult(true);
-                        }
-                        Subscribe(child);
-                    };
-                }
-                var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
-                NotifyCollectionChangedEventHandler changed = (_, e) => {
-                    mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
+            var context = SynchronizationContext.Current;
+            var uiThread = Environment.CurrentManagedThreadId;
+            IOperator @operator = new Operator(context);
+            var release = NewSignal();
+            var collectionChanges = NewSignal();
+            var mutations = new ConcurrentQueue<(SynchronizationContext Context, int Thread, int Depth)>();
+            Operation root = null;
+            void Subscribe(OperationBase parent) {
+                ((INotifyCollectionChanged)parent.ChildSource).CollectionChanged += (_, e) => {
+                    var child = (OperationBase)e.NewItems[0];
+                    mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, child.Depth));
                     if (mutations.Count == 6) {
                         collectionChanges.TrySetResult(true);
                     }
+                    Subscribe(child);
                 };
-                source.CollectionChanged += changed;
-                try {
-                    OperationDelegate task = async (progress, _) => {
-                        Assert.That(SynchronizationContext.Current, Is.SameAs(context));
-                        await release.Task.ConfigureAwait(false);
-                        await progress.Children(new[] { 1, 2 }, index => new OperationChild($"child {index}",
-                            async (childProgress, _) => {
-                                await Task.Run(async () => {
-                                    await childProgress.Child("grandchild", (_, _) => Task.CompletedTask);
-                                }, CancellationToken.None).ConfigureAwait(false);
-                            })).ConfigureAwait(false);
-                    };
-                    @operator.Operate("root", task);
-                    root = (Operation)@operator.Operations.Snapshot().Single();
-                    Subscribe(root);
-                    Assert.That(root, Is.Not.Null);
-                    release.SetResult(true);
-                    await root.Completion.WaitAsync(Timeout);
-                    await collectionChanges.Task.WaitAsync(Timeout);
-                    using (Assert.EnterMultipleScope()) {
-                        Assert.That(mutations.Select(item => item.Depth).OrderBy(depth => depth), Is.EqualTo(new[] { 0, 0, 1, 1, 2, 2 }));
-                        Assert.That(mutations.Where(item => item.Depth == 0)
-                            .All(item => item.Context == context && item.Thread == uiThread), Is.True);
-                        Assert.That(mutations.Where(item => item.Depth > 0)
-                            .All(item => item.Context == context && item.Thread == uiThread), Is.True);
-                        Assert.That(@operator.Operations.Count, Is.Zero);
-                    }
+            }
+            var source = (INotifyCollectionChanged)((OperationCollection)@operator.Operations).Source;
+            NotifyCollectionChangedEventHandler changed = (_, e) => {
+                mutations.Enqueue((SynchronizationContext.Current, Environment.CurrentManagedThreadId, 0));
+                if (mutations.Count == 6) {
+                    collectionChanges.TrySetResult(true);
                 }
-                finally {
-                    release.TrySetResult(true);
-                    source.CollectionChanged -= changed;
+            };
+            source.CollectionChanged += changed;
+            try {
+                OperationDelegate task = async (progress, _) => {
+                    Assert.That(SynchronizationContext.Current, Is.SameAs(context));
+                    await release.Task.ConfigureAwait(false);
+                    await progress.Children(new[] { 1, 2 }, index => new OperationChild($"child {index}",
+                        async (childProgress, _) => {
+                            await Task.Run(async () => {
+                                await childProgress.Child("grandchild", (_, _) => Task.CompletedTask);
+                            }, CancellationToken.None).ConfigureAwait(false);
+                        })).ConfigureAwait(false);
+                };
+                @operator.Operate("root", task);
+                root = (Operation)@operator.Operations.Snapshot().Single();
+                Subscribe(root);
+                Assert.That(root, Is.Not.Null);
+                release.SetResult(true);
+                await root.Completion.WaitAsync(Timeout);
+                await collectionChanges.Task.WaitAsync(Timeout);
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(mutations.Select(item => item.Depth).OrderBy(depth => depth), Is.EqualTo(new[] { 0, 0, 1, 1, 2, 2 }));
+                    Assert.That(mutations.Where(item => item.Depth == 0)
+                        .All(item => item.Context == context && item.Thread == uiThread), Is.True);
+                    Assert.That(mutations.Where(item => item.Depth > 0)
+                        .All(item => item.Context == context && item.Thread == uiThread), Is.True);
+                    Assert.That(@operator.Operations.Count, Is.Zero);
                 }
+            }
+            finally {
+                release.TrySetResult(true);
+                source.CollectionChanged -= changed;
+            }
         });
 
     /// <summary>Verifies all public and command removal paths use the operation's captured context.</summary>

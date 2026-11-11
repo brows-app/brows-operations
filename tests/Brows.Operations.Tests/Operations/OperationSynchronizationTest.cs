@@ -8,7 +8,7 @@ namespace Brows.Operations;
 /// Tests notification batching across nested and reentrant state updates.
 /// </summary>
 [TestFixture]
-public sealed class OperationSynchronizationTest {
+internal sealed class OperationSynchronizationTest {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     /// <summary>

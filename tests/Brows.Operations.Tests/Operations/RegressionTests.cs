@@ -11,7 +11,7 @@ namespace Brows.Operations;
 
 /// <summary>Tests regressions in hierarchical lifetime tracking, notifications, cancellation, and removal.</summary>
 [TestFixture]
-public sealed class RegressionTests {
+internal sealed class RegressionTests {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);

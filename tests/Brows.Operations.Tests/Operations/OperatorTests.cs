@@ -13,7 +13,7 @@ namespace Brows.Operations;
 
 /// <summary>Tests operation execution, collection behavior, progress reporting, and cancellation through IOperator.</summary>
 [TestFixture]
-public sealed class OperatorTests {
+internal sealed class OperatorTests {
     private static IOperator CreateOperator() =>
         new Operator();
 
@@ -710,6 +710,122 @@ public sealed class OperatorTests {
                 Assert.That(displayValues.Select(value => value.Target), Is.EqualTo(new[] { "two", "2" }));
             }
             return Task.CompletedTask;
+        });
+
+    /// <summary>Verifies that formatting changes notify the affected display properties.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Change_FormattingUpdatesNotifyFormattedDisplayProperties() =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            var reported = NewSignal();
+            var release = NewSignal();
+            IOperationProgress reporter = null;
+            var operation = Start(@operator, "file size", async (progress, _) => {
+                reporter = progress;
+                progress.Change(setProgress: 1_572_864, setTarget: 2_097_152);
+                reported.SetResult();
+                await release.Task;
+            });
+            try {
+                await reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var displayChanges = new List<string>();
+                ((INotifyPropertyChanged)operation).PropertyChanged += (_, change) => {
+                    if (change.PropertyName is nameof(OperationBase.ProgressString) or
+                        nameof(OperationBase.TargetString)) {
+                        displayChanges.Add(change.PropertyName);
+                    }
+                };
+
+                reporter.Change(kind: OperationProgressKind.FileSize);
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(displayChanges, Is.EquivalentTo(new[] {
+                        nameof(OperationBase.ProgressString), nameof(OperationBase.TargetString)
+                    }));
+                    Assert.That(((OperationBase)operation).ProgressString, Is.EqualTo("1.5 MiB"));
+                    Assert.That(((OperationBase)operation).TargetString, Is.EqualTo("2 MiB"));
+                }
+
+                displayChanges.Clear();
+                reporter.Change(progressStringFormat: "0.00");
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(displayChanges, Is.EqualTo(new[] { nameof(OperationBase.ProgressString) }));
+                    Assert.That(((OperationBase)operation).ProgressString, Is.EqualTo("1.50 MiB"));
+                }
+
+                displayChanges.Clear();
+                reporter.Change(targetStringFormat: "0.000");
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(displayChanges, Is.EqualTo(new[] { nameof(OperationBase.TargetString) }));
+                    Assert.That(((OperationBase)operation).TargetString, Is.EqualTo("2.000 MiB"));
+                }
+
+                displayChanges.Clear();
+                reporter.Change(formatProvider: CultureInfo.GetCultureInfo("fr-FR"));
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(displayChanges, Is.EquivalentTo(new[] {
+                        nameof(OperationBase.ProgressString), nameof(OperationBase.TargetString)
+                    }));
+                    Assert.That(((OperationBase)operation).ProgressString, Is.EqualTo("1,50 MiB"));
+                    Assert.That(((OperationBase)operation).TargetString, Is.EqualTo("2,000 MiB"));
+                }
+            }
+            finally {
+                release.TrySetResult();
+            }
+            await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        });
+
+    /// <summary>Verifies that equal cultures with different number formats replace the provider.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Change_ReplacesEqualFormatProviderWithDifferentNumberFormat() =>
+        UiTestThread.Run(async () => {
+            var first = (CultureInfo)CultureInfo.GetCultureInfo("en-US").Clone();
+            var second = (CultureInfo)first.Clone();
+            second.NumberFormat.NumberDecimalSeparator = ",";
+            Assert.That(first.Equals(second), Is.True);
+
+            var reported = NewSignal();
+            var release = NewSignal();
+            IOperationProgress reporter = null;
+            var operation = Start(CreateOperator(), "file size", async (progress, _) => {
+                reporter = progress;
+                progress.Change(setProgress: 1536, setTarget: 2560,
+                                kind: OperationProgressKind.FileSize, formatProvider: first);
+                reported.SetResult();
+                await release.Task;
+            });
+            try {
+                await reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var changes = new List<string>();
+                ((INotifyPropertyChanged)operation).PropertyChanged += (_, change) =>
+                    changes.Add(change.PropertyName);
+
+                reporter.Change(formatProvider: second);
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(operation.FormatProvider, Is.SameAs(second));
+                    Assert.That(operation.ProgressString, Is.EqualTo("1,5 KiB"));
+                    Assert.That(operation.TargetString, Is.EqualTo("2,5 KiB"));
+                    Assert.That(changes, Is.EquivalentTo(new[] {
+                        nameof(OperationBase.FormatProvider),
+                        nameof(OperationBase.ProgressString),
+                        nameof(OperationBase.TargetString)
+                    }));
+                }
+
+                changes.Clear();
+                reporter.Change(formatProvider: second);
+                reporter.Change(formatProvider: null);
+                using (Assert.EnterMultipleScope()) {
+                    Assert.That(operation.FormatProvider, Is.SameAs(second));
+                    Assert.That(changes, Is.Empty);
+                }
+            }
+            finally {
+                release.TrySetResult();
+            }
+            await operation.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         });
 
     /// <summary>Verifies that metadata reports update the operation's name and detail text.</summary>

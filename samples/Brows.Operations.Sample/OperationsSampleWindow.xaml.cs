@@ -1,8 +1,6 @@
 ﻿using Brows.Composition;
 using Brows.Operations;
-using System;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -35,6 +33,7 @@ sealed partial class OperationsSampleWindow : IExport {
     private void RunShowcase_Click(object sender, RoutedEventArgs e) {
         StartOperation("Nested workflow", NestedWorkflow);
         StartOperation("Cancellable task", CancellableWork);
+        StartOperation("File copy (simulated)", FileSizeWork);
         StartOperation("Child error", ChildFailure);
         StatusText.Text = "Showcase started. Try cancelling a task or removing the failed operation.";
     }
@@ -59,6 +58,10 @@ sealed partial class OperationsSampleWindow : IExport {
 
     private void RunProgressUpdates_Click(object sender, RoutedEventArgs e) {
         StartOperation("Set/add progress and custom labels", ProgressUpdates);
+    }
+
+    private void RunFileSizes_Click(object sender, RoutedEventArgs e) {
+        StartOperation("File copy (simulated)", FileSizeWork);
     }
 
     private void RunCancellable_Click(object sender, RoutedEventArgs e) {
@@ -153,6 +156,20 @@ sealed partial class OperationsSampleWindow : IExport {
                         targetString: "10 units",
                         data: "Added progress and target");
         await Task.Delay(1100, token);
+    }
+
+    private static async Task FileSizeWork(IOperationProgress progress, CancellationToken token) {
+        const long chunkSize = 512 * 1024;
+        const long fileSize = 16 * 1024 * 1024;
+        progress.Change(setTarget: fileSize,
+                        kind: OperationProgressKind.FileSize,
+                        data: "Simulated copy; progress and target are byte counts",
+                        targetStringFormat: "0.0",
+                        progressStringFormat: "0.0");
+        for (long copied = 0; copied < fileSize; copied += chunkSize) {
+            await Task.Delay(350, token);
+            progress.Change(addProgress: chunkSize);
+        }
     }
 
     private static async Task CancellableWork(IOperationProgress progress, CancellationToken token) {

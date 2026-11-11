@@ -23,10 +23,30 @@ public interface IOperationProgress {
     /// <param name="setProgress">An absolute progress value, or null to leave it unchanged before any addition.</param>
     /// <param name="addTarget">An amount to add to the target after applying <paramref name="setTarget"/>.</param>
     /// <param name="setTarget">An absolute target value, or null to leave it unchanged before any addition.</param>
-    /// <param name="progressString">A progress display string, or null to use the numeric progress value.</param>
-    /// <param name="targetString">A target display string, or null to use the numeric target value.</param>
+    /// <param name="progressString">
+    /// A progress display override, or null to use the numeric value formatted according to the progress kind.
+    /// </param>
+    /// <param name="targetString">
+    /// A target display override, or null to use the numeric value formatted according to the progress kind.
+    /// </param>
     /// <param name="name">A new display name, or null to leave the name unchanged.</param>
     /// <param name="data">New detail text, or null to leave the detail text unchanged.</param>
+    /// <param name="kind">
+    /// The unit for reported progress and target values, or null to leave the current kind unchanged.
+    /// Use <see cref="OperationProgressKind.FileSize"/> when values are byte counts.
+    /// </param>
+    /// <param name="progressStringFormat">
+    /// The numeric format string for scaled file-size progress, or null to leave the current format unchanged.
+    /// Counts below 1 KiB are displayed as whole bytes.
+    /// </param>
+    /// <param name="targetStringFormat">
+    /// The numeric format string for scaled file-size targets, or null to leave the current format unchanged.
+    /// Counts below 1 KiB are displayed as whole bytes.
+    /// </param>
+    /// <param name="formatProvider">
+    /// The provider used to format file-size values, or null to leave the current provider unchanged.
+    /// When no provider has been set, the current culture is used.
+    /// </param>
     /// <remarks>
     /// Numeric values represent caller-defined units. Changes are aggregated into each ancestor;
     /// setting a child's value adjusts ancestors by the difference. Set values are applied before
@@ -42,7 +62,11 @@ public interface IOperationProgress {
                 string progressString = null,
                 string targetString = null,
                 string name = null,
-                string data = null);
+                string data = null,
+                OperationProgressKind? kind = null,
+                string progressStringFormat = null,
+                string targetStringFormat = null,
+                IFormatProvider formatProvider = null);
 
     /// <summary>Starts a child operation and waits for it and its registered descendants to finish.</summary>
     /// <param name="name">The child's initial display name.</param>

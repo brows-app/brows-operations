@@ -4,6 +4,12 @@ Core interfaces and operation tracking for asynchronous .NET work. An `IOperator
 
 Progress and target changes from children roll up to the root operation. Failed operations remain in the collection for inspection, while successful roots are removed automatically. The concrete `Operator` implementation is internal; reference Brows.Operations.Composition and resolve `IOperatorFactory` through Brows.Composition to create an operator.
 
+For byte-valued progress, pass `kind: OperationProgressKind.FileSize` to `IOperationProgress.Change`.
+The default progress and target strings then use B, KiB, MiB, and larger binary units. Set
+`progressStringFormat` or `targetStringFormat` to customize the numeric portion of scaled values; counts
+below 1 KiB remain whole bytes. Pass `formatProvider` to choose the number-formatting culture. Null
+formatting arguments leave their existing settings unchanged.
+
 `IOperatorFactory.Create()` captures the current synchronization context when the operator is created.
 For WPF binding, create the operator on the dispatcher thread or pass its context explicitly to
 `Create(SynchronizationContext)`. Root and child collection changes are posted asynchronously to the

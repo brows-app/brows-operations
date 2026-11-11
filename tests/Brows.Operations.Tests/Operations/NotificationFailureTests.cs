@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections;
-using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -9,7 +8,7 @@ namespace Brows.Operations;
 
 /// <summary>Tests error publication and propagation of completion-listener failures.</summary>
 [TestFixture]
-public sealed class NotificationFailureTests {
+internal sealed class NotificationFailureTests {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     private static Operation Start(IOperator @operator, OperationDelegate task, Action<Operation> subscribe = null) {

@@ -57,6 +57,13 @@ progress.Change(setProgress: bytesCopied,
 1 KiB remain whole bytes. `formatProvider` selects the number-formatting culture; null leaves each existing
 setting unchanged.
 
+The WPF sample displays the current and average progress rates, in progress units per second, for each
+operation. The current rate samples net progress change since the previous sample about once per second;
+the average is the net change since the operation started divided by elapsed lifetime, including idle time.
+Progress corrections can make either rate negative. The current rate becomes zero when the operation and
+its descendants finish, while the average freezes at its final value. File-size progress uses bytes per
+second. These bindable runtime values are not members of the `IOperation` interface.
+
 Successful root operations are removed from the collection when they finish. Failed operations remain available with their error state until removed. The WPF control displays relevant operations and their child hierarchy.
 
 ## UI scheduling

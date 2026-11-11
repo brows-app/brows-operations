@@ -10,6 +10,14 @@ The default progress and target strings then use B, KiB, MiB, and larger binary 
 below 1 KiB remain whole bytes. Pass `formatProvider` to choose the number-formatting culture. Null
 formatting arguments leave their existing settings unchanged.
 
+The WPF operation view can display `ProgressRate` and `ProgressRateAverage`, in progress units per
+second. The current rate samples the net change since the previous sample about once per second. The
+average is the net progress change since the operation started divided by elapsed lifetime, including
+idle time. Progress corrections can make either value negative. The bindable runtime properties raise
+`PropertyChanged` when a sample changes their value. When the operation and its descendants finish, the
+current rate becomes zero and the average freezes at its final value. File-size progress uses bytes per
+second. These display properties are not members of the public `IOperation` interface.
+
 `IOperatorFactory.Create()` captures the current synchronization context when the operator is created.
 For WPF binding, create the operator on the dispatcher thread or pass its context explicitly to
 `Create(SynchronizationContext)`. Root and child collection changes are posted asynchronously to the

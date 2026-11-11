@@ -11,6 +11,9 @@
     <Project Path="tests/Brows.Operations.Tests/Brows.Operations.Tests.csproj" />
     <Project Path="tests/Brows.Operations.Windows.Tests/Brows.Operations.Windows.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Brows.Operations.Tests.PoolProbe/Brows.Operations.Tests.PoolProbe.csproj" />
+  </Folder>
   <Folder Name="/_/">
     <File Path=".editorconfig" />
     <File Path=".gitattributes" />
@@ -31,6 +34,9 @@
   </Folder>
   <Folder Name="/_/tests/">
     <File Path="tests/Directory.Build.props" />
+  </Folder>
+  <Folder Name="/_/tools/">
+    <File Path="tools/Directory.Build.props" />
   </Folder>
   <Project Path="source/Brows.Operations.Composition/Brows.Operations.Composition.csproj" />
   <Project Path="source/Brows.Operations.Windows/Brows.Operations.Windows.csproj" />

@@ -163,12 +163,15 @@ sealed partial class OperationsSampleWindow : IExport {
         const long fileSize = 16 * 1024 * 1024;
         progress.Change(setTarget: fileSize,
                         kind: OperationProgressKind.FileSize,
-                        data: "Simulated copy; progress and target are byte counts",
+                        data: "Simulated copy; progress and target are bytes; pauses to show idle rates",
                         targetStringFormat: "0.0",
                         progressStringFormat: "0.0");
         for (long copied = 0; copied < fileSize; copied += chunkSize) {
             await Task.Delay(350, token);
             progress.Change(addProgress: chunkSize);
+            if (copied + chunkSize == fileSize / 2) {
+                await Task.Delay(TimeSpan.FromMilliseconds(2500), token);
+            }
         }
     }
 

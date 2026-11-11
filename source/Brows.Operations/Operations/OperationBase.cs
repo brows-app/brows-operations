@@ -23,6 +23,8 @@ internal class OperationBase : Notifier, IOperation {
     private static readonly PropertyChangedEventArgs ProgressEvent = new(nameof(Progress));
     private static readonly PropertyChangedEventArgs ProgressingEvent = new(nameof(Progressing));
     private static readonly PropertyChangedEventArgs ProgressPercentEvent = new(nameof(ProgressPercent));
+    private static readonly PropertyChangedEventArgs ProgressRateEvent = new(nameof(ProgressRate));
+    private static readonly PropertyChangedEventArgs ProgressRateAverageEvent = new(nameof(ProgressRateAverage));
     private static readonly PropertyChangedEventArgs ProgressStringEvent = new(nameof(ProgressString));
     private static readonly PropertyChangedEventArgs ProgressStringFormatEvent = new(nameof(ProgressStringFormat));
     private static readonly PropertyChangedEventArgs ProgressKindEvent = new(nameof(ProgressKind));
@@ -38,10 +40,17 @@ internal class OperationBase : Notifier, IOperation {
     private bool Started;
     private bool ChildCollectionClosed;
     private bool CancellationRequested;
+    private bool RateSamplingClosed;
+    private bool RateSamplingDisabled;
+    private bool RateSamplerRefreshing;
     private int TokenSourceCancellationCount;
     private bool TokenSourceDisposalPending;
     private Stopwatch Stopwatch;
     private CancellationTokenSource TokenSource;
+    private CancellationTokenSource RateSamplerTokenSource;
+    private Task RateSamplerTask;
+    private Exception RateSamplerError;
+    private readonly OperationRate Rate = new();
     private readonly OperationSynchronization Synchronization;
     private readonly ProgressChangeContext ProgressChange;
     private readonly OperationBaseCollection ChildCollection;
@@ -156,6 +165,100 @@ internal class OperationBase : Notifier, IOperation {
         MakeRelevant();
     }
 
+    private async Task SampleRates(CancellationToken token) {
+        try {
+            while (true) {
+                await TASK.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
+                var refresh = Synchronization.Update(() => {
+                    if (RateSamplingClosed || Complete) {
+                        return false;
+                    }
+                    RateSamplerRefreshing = true;
+                    return true;
+                });
+                if (!refresh) {
+                    return;
+                }
+                try {
+                    RefreshRates();
+                }
+                catch (Exception ex) {
+                    RateSamplerError = ex;
+                    return;
+                }
+                finally {
+                    Synchronization.Update(() => {
+                        RateSamplerRefreshing = false;
+                    });
+                }
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) {
+        }
+        catch (Exception ex) {
+            RateSamplerError = ex;
+        }
+    }
+
+    private void StartRateSampler() {
+        RateSamplerTokenSource = new CancellationTokenSource();
+        RateSamplerTask = SampleRates(RateSamplerTokenSource.Token);
+    }
+
+    private void RequestRateSampler() {
+        var root = this;
+        while (root.Parent is not null) {
+            root = root.Parent;
+        }
+        root.Synchronization.Update(() => {
+            if (!root.RateSamplingDisabled && root.Progressing && !root.Complete && !root.RateSamplingClosed) {
+                if (root.RateSamplerTokenSource is null) {
+                    root.StartRateSampler();
+                }
+            }
+        });
+    }
+
+    private async Task StopRateSampler() {
+        var source = RateSamplerTokenSource;
+        if (source is null) {
+            return;
+        }
+        var task = RateSamplerTask;
+        try {
+            source.Cancel();
+            var refreshing = Synchronization.Read(() => RateSamplerRefreshing);
+            /*
+             * The root closes sampling before shutdown. An idle sampler can only observe cancellation or
+             * that closed state, so do not block its caller on a queued continuation that may need the
+             * same thread-pool worker. A listener can complete the operation inline during refresh;
+             * awaiting an active refresh lets it return before finalization reads any error it raised.
+             */
+            if (refreshing) {
+                await task.ConfigureAwait(false);
+            }
+        }
+        finally {
+            source.Dispose();
+            RateSamplerTokenSource = null;
+            RateSamplerTask = null;
+        }
+    }
+
+    private void RefreshRates() => RefreshRates(operation => operation.Stopwatch?.Elapsed ?? TimeSpan.Zero);
+
+    private void CompleteRate() {
+        var previousRate = Rate.ProgressRate;
+        var previousAverage = Rate.ProgressRateAverage;
+        Rate.Complete(Progress, Stopwatch?.Elapsed ?? TimeSpan.Zero);
+        if (Rate.ProgressRate != previousRate) {
+            NotifyPropertyChanged(ProgressRateEvent);
+        }
+        if (Rate.ProgressRateAverage != previousAverage) {
+            NotifyPropertyChanged(ProgressRateAverageEvent);
+        }
+    }
+
     private void ChangeProgress(long? setProgress = null,
                                 long? addProgress = null,
                                 long? setTarget = null,
@@ -267,6 +370,7 @@ internal class OperationBase : Notifier, IOperation {
             var cancelToken = Synchronization.Update(() => {
                 TokenSource = tokenSource;
                 Stopwatch = Stopwatch.StartNew();
+                Rate.Start(Progress, TimeSpan.Zero);
                 Progressing = true;
                 if (!CancellationRequested) {
                     return false;
@@ -281,7 +385,8 @@ internal class OperationBase : Notifier, IOperation {
             Exception taskError = null;
             try {
                 if (!token.IsCancellationRequested && Synchronization.Read(() => !CancellationRequested)) {
-                    await Task(progress, token);
+                    var work = Task(progress, token);
+                    await work;
                 }
             }
             catch (Exception ex) {
@@ -309,8 +414,16 @@ internal class OperationBase : Notifier, IOperation {
                 await TASK.WhenAll(children.Select(child => child.Completion));
             }
             finally {
+                if (Parent is null) {
+                    Synchronization.Update(() => {
+                        RateSamplingClosed = true;
+                        Stopwatch?.Stop();
+                    });
+                    await StopRateSampler();
+                }
                 Synchronization.Update(() => {
                     Stopwatch?.Stop();
+                    CompleteRate();
                     var source = TokenSource;
                     TokenSource = null;
                     if (source is not null) {
@@ -333,6 +446,9 @@ internal class OperationBase : Notifier, IOperation {
                     Complete = true;
                 });
                 Completed?.Invoke(this, EventArgs.Empty);
+            }
+            if (Parent is null && RateSamplerError is not null) {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(RateSamplerError).Throw();
             }
         }
     }
@@ -379,6 +495,45 @@ internal class OperationBase : Notifier, IOperation {
         if (Parent is null) {
             ObserveCompletion(CompletionSource.Task, Synchronization.SynchronizationContext);
         }
+    }
+
+    internal void RefreshRates(Func<OperationBase, TimeSpan> elapsedTime) {
+        if (elapsedTime is null) {
+            throw new ArgumentNullException(nameof(elapsedTime));
+        }
+        Synchronization.Update(() => {
+            if (RateSamplingClosed || Complete) {
+                return;
+            }
+            refresh(this);
+
+            void refresh(OperationBase operation) {
+                if (operation.Progressing && !operation.Complete) {
+                    var previousRate = operation.Rate.ProgressRate;
+                    var previousAverage = operation.Rate.ProgressRateAverage;
+                    if (operation.Rate.Sample(operation.Progress, elapsedTime(operation))) {
+                        if (operation.Rate.ProgressRate != previousRate) {
+                            operation.NotifyPropertyChanged(ProgressRateEvent);
+                        }
+                        if (operation.Rate.ProgressRateAverage != previousAverage) {
+                            operation.NotifyPropertyChanged(ProgressRateAverageEvent);
+                        }
+                    }
+                }
+                foreach (var child in operation.ChildCollection.ToArray()) {
+                    refresh(child);
+                }
+            }
+        });
+    }
+
+    internal void DisableRateSampling() {
+        Synchronization.Update(() => {
+            if (Started) {
+                throw new InvalidOperationException("Rate sampling must be disabled before the operation starts.");
+            }
+            RateSamplingDisabled = true;
+        });
     }
 
     protected sealed override void OnPropertyChanged(PropertyChangedEventArgs e) {
@@ -438,6 +593,10 @@ internal class OperationBase : Notifier, IOperation {
         private set => Synchronization.Update(() => _Progress = value);
     }
     private long _Progress;
+
+    public double ProgressRate => Synchronization.Read(() => Rate.ProgressRate);
+
+    public double ProgressRateAverage => Synchronization.Read(() => Rate.ProgressRateAverage);
 
     public double ProgressPercent {
         get => Synchronization.Read(() => field);
@@ -646,6 +805,9 @@ internal class OperationBase : Notifier, IOperation {
                                                 !addTarget.HasValue;
                 if (notifyTargetStringChanged) {
                     Operation.NotifyPropertyChanged(TargetStringEvent);
+                }
+                if (addProgress.HasValue || setProgress.HasValue) {
+                    Operation.RequestRateSampler();
                 }
             });
         }

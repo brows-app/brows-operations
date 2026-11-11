@@ -4,4 +4,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\source\Brows.Operations\Brows.Operations.csproj" />
   </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <ProjectReference Include="..\..\tools\Brows.Operations.Tests.PoolProbe\Brows.Operations.Tests.PoolProbe.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
 </Project>

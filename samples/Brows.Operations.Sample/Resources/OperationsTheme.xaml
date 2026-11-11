@@ -119,9 +119,61 @@
                TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
   </DataTemplate>
   <DataTemplate x:Key="DataCellTemplate">
-    <TextBlock Text="{Binding}" Margin="12,14" Width="226" VerticalAlignment="Center"
-               FontSize="12" Foreground="{StaticResource MutedBrush}"
-               TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
+    <Grid Margin="12,8" Width="226" VerticalAlignment="Center">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+      <TextBlock Grid.Row="0" Text="{Binding}" FontSize="12" Foreground="{StaticResource MutedBrush}"
+                 TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
+      <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,0">
+        <TextBlock Text="Rate " FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+        <TextBlock FontSize="11" Foreground="{StaticResource AccentBrush}">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Text"
+                      Value="{Binding DataContext.ProgressRate,
+                                      RelativeSource={RelativeSource AncestorType=ContentControl},
+                                      StringFormat={}{0:N2} units/s}"/>
+              <Style.Triggers>
+                <DataTrigger Value="FileSize"
+                             Binding="{Binding DataContext.ProgressKind,
+                                               RelativeSource={RelativeSource AncestorType=ContentControl}}">
+                  <Setter Property="Text"
+                          Value="{Binding DataContext.ProgressRate,
+                                          RelativeSource={RelativeSource AncestorType=ContentControl},
+                                          StringFormat={}{0:N2} B/s}"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
+      </StackPanel>
+      <StackPanel Grid.Row="2" Orientation="Horizontal">
+        <TextBlock Text="Average " FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+        <TextBlock FontSize="11" Foreground="{StaticResource AccentBrush}">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Text"
+                      Value="{Binding DataContext.ProgressRateAverage,
+                                      RelativeSource={RelativeSource AncestorType=ContentControl},
+                                      StringFormat={}{0:N2} units/s}"/>
+              <Style.Triggers>
+                <DataTrigger Value="FileSize"
+                             Binding="{Binding DataContext.ProgressKind,
+                                               RelativeSource={RelativeSource AncestorType=ContentControl}}">
+                  <Setter Property="Text"
+                          Value="{Binding DataContext.ProgressRateAverage,
+                                          RelativeSource={RelativeSource AncestorType=ContentControl},
+                                          StringFormat={}{0:N2} B/s}"/>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
+      </StackPanel>
+    </Grid>
   </DataTemplate>
   <DataTemplate x:Key="ProgressCellTemplate">
     <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="6"

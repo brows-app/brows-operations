@@ -10,6 +10,12 @@ dotnet run --project samples/Brows.Operations.Sample
 
 **Run showcase** starts nested work, a cancellable task, and an intentional child failure together. The individual scenario buttons demonstrate parallel children, explicit progress labels, successful completion, and a parent that fails while its child is still working. Work lasts long enough to inspect the hierarchy and use Cancel. Successful operations disappear automatically; failures remain until removed. **Clear finished** calls `IOperationCollection.RemoveComplete()` to remove completed roots. Pass `withError: true` or `withError: false` to remove only failed or successful roots, respectively.
 
+Each operation row shows **Rate** and **Average** beneath its detail text. Rates are sampled about once
+per second; ordinary progress uses units per second and file-size progress uses bytes per second. The
+simulated file copy pauses for 2.5 seconds halfway through to show the current rate fall to zero while
+its lifetime average decreases. At completion, the current rate is zero and the average remains at its
+final value.
+
 ## Styling the control
 
 [Resources/OperationsTheme.xaml](Resources/OperationsTheme.xaml) is the reusable styling example. It merges the Windows package's `Resources/Styles.xaml` dictionary and defines `ShowcaseOperatorStyle`, based on the package's implicit `OperatorControl` style. Apply it to an operator control:

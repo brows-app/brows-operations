@@ -70,7 +70,8 @@
         <StackPanel>
           <TextBlock Text="02  /  PROGRESS" FontSize="10" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
           <TextBlock Text="Follow the progress" FontSize="16" FontWeight="SemiBold" Margin="0,7,0,4"/>
-          <TextBlock Text="Live updates and cooperative cancellation." FontSize="12" Foreground="{StaticResource MutedBrush}"/>
+          <TextBlock Text="Rates update each second; the file-size run pauses to show idle rates."
+                     FontSize="12" Foreground="{StaticResource MutedBrush}"/>
           <WrapPanel>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Set &amp; add" Click="RunProgressUpdates_Click"/>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="File sizes" Click="RunFileSizes_Click"/>

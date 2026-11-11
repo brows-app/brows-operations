@@ -1017,7 +1017,8 @@ internal sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var started = NewSignal();
-            var operation = Start(@operator, "cancel", async (_, token) => {
+            var operation = Start(@operator, "cancel", async (progress, token) => {
+                progress.Change(setProgress: 1);
                 started.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             });

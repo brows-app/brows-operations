@@ -180,6 +180,125 @@ internal sealed class OperationBaseTest {
     }
 
     [Test]
+    public async Task Change_FormatsProgressRatesWithSeparateFormatsAndProvider() {
+        IOperator @operator = new Operator();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        IOperationProgress reporter = null;
+        var progressRateStringChanged = false;
+        var progressRateAverageStringChanged = false;
+        var operation = Start(@operator, async (progress, _) => {
+            reporter = progress;
+            progress.Change(setProgress: 25);
+            reported.TrySetResult();
+            await release.Task;
+        }, operation => operation.DisableRateSampling());
+        operation.PropertyChanged += (_, args) => {
+            progressRateStringChanged |= args.PropertyName == nameof(OperationBase.ProgressRateString);
+            progressRateAverageStringChanged |=
+                args.PropertyName == nameof(OperationBase.ProgressRateAverageString);
+        };
+
+        try {
+            await reported.Task.WaitAsync(Timeout);
+            reporter.Change(progressRateFormat: "0.00",
+                            progressRateAverageFormat: "0.000",
+                            formatProvider: CultureInfo.GetCultureInfo("en-US"));
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(((OperationBase)operation).ProgressRateString, Is.EqualTo("0.00"));
+                Assert.That(((OperationBase)operation).ProgressRateAverageString, Is.EqualTo("0.000"));
+                Assert.That(progressRateStringChanged, Is.True);
+                Assert.That(progressRateAverageStringChanged, Is.True);
+            }
+
+            progressRateStringChanged = false;
+            progressRateAverageStringChanged = false;
+            operation.RefreshRates(_ => TimeSpan.FromSeconds(2));
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(((OperationBase)operation).ProgressRateString, Is.EqualTo("12.50"));
+                Assert.That(((OperationBase)operation).ProgressRateAverageString, Is.EqualTo("12.500"));
+                Assert.That(progressRateStringChanged, Is.True);
+                Assert.That(progressRateAverageStringChanged, Is.True);
+            }
+
+            progressRateStringChanged = false;
+            progressRateAverageStringChanged = false;
+            reporter.Change(formatProvider: CultureInfo.GetCultureInfo("fr-FR"));
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(((OperationBase)operation).ProgressRateString, Is.EqualTo("12,50"));
+                Assert.That(((OperationBase)operation).ProgressRateAverageString, Is.EqualTo("12,500"));
+                Assert.That(progressRateStringChanged, Is.True);
+                Assert.That(progressRateAverageStringChanged, Is.True);
+            }
+        }
+        finally {
+            release.TrySetResult();
+        }
+
+        await operation.Completion.WaitAsync(Timeout);
+    }
+
+    [Test]
+    public async Task Change_FormatsFileSizeRatesWithAutomaticUnits() {
+        IOperator @operator = new Operator();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        IOperationProgress reporter = null;
+        var progressRateStringChanged = false;
+        var progressRateAverageStringChanged = false;
+        var operation = Start(@operator, async (progress, _) => {
+            reporter = progress;
+            progress.Change(setProgress: 1_000_000, setTarget: 2_000_000);
+            reported.TrySetResult();
+            await release.Task;
+        }, operation => operation.DisableRateSampling());
+        operation.PropertyChanged += (_, args) => {
+            progressRateStringChanged |= args.PropertyName == nameof(OperationBase.ProgressRateString);
+            progressRateAverageStringChanged |=
+                args.PropertyName == nameof(OperationBase.ProgressRateAverageString);
+        };
+
+        try {
+            await reported.Task.WaitAsync(Timeout);
+            reporter.Change(progressFormat: "N2",
+                            progressRateFormat: "N2",
+                            progressRateAverageFormat: "N2",
+                            formatProvider: CultureInfo.InvariantCulture);
+            progressRateStringChanged = false;
+            progressRateAverageStringChanged = false;
+
+            reporter.Change(kind: OperationProgressKind.FileSize);
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(((OperationBase)operation).ProgressString, Is.EqualTo("976.56 KiB"));
+                Assert.That(((OperationBase)operation).ProgressRateString, Is.EqualTo("0 B"));
+                Assert.That(((OperationBase)operation).ProgressRateAverageString, Is.EqualTo("0 B"));
+                Assert.That(progressRateStringChanged, Is.True);
+                Assert.That(progressRateAverageStringChanged, Is.True);
+            }
+
+            operation.RefreshRates(_ => TimeSpan.FromSeconds(1));
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(((OperationBase)operation).ProgressRateString, Is.EqualTo("976.56 KiB"));
+                Assert.That(((OperationBase)operation).ProgressRateAverageString, Is.EqualTo("976.56 KiB"));
+                Assert.That(((OperationBase)operation).ProgressRateString,
+                            Is.EqualTo(((OperationBase)operation).ProgressString));
+                Assert.That(((OperationBase)operation).ProgressRateAverageString,
+                            Is.EqualTo(((OperationBase)operation).ProgressString));
+            }
+        }
+        finally {
+            release.TrySetResult();
+        }
+
+        await operation.Completion.WaitAsync(Timeout);
+    }
+
+    [Test]
     public async Task SamplerListenerFailure_FaultsCompletionAfterFinalizingOperation() {
         Operation operation = null;
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -1,5 +1,8 @@
 ﻿using Brows.Operations;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
 
 namespace Brows.Windows.Controls;
 
@@ -16,12 +19,18 @@ namespace Brows.Windows.Controls;
 /// Built-in Cancel and Remove commands deliver CanExecuteChanged on their creating dispatcher;
 /// changes raised on workers are queued asynchronously to that dispatcher.
 /// </remarks>
-sealed partial class OperatorControl {
+public sealed partial class OperatorControl : Control {
     static OperatorControl() {
         DefaultStyleKeyProperty.OverrideMetadata(
             forType: typeof(OperatorControl),
             typeMetadata: new FrameworkPropertyMetadata(typeof(OperatorControl)));
     }
+
+    private const string OperationHeaderGridTemplatePartName = "PART_OperationHeaderGrid";
+    private const string OperationListScrollViewerTemplatePartName = "PART_OperationListScrollViewer";
+    private Grid _OperationHeaderGrid;
+    private TranslateTransform _OperationHeaderTransform;
+    private ScrollViewer _OperationListScrollViewer;
 
     private static readonly DependencyPropertyKey OperationCollectionKey = DependencyProperty.RegisterReadOnly(
         name: nameof(OperationCollection),
@@ -29,6 +38,12 @@ sealed partial class OperatorControl {
         ownerType: typeof(OperatorControl),
         typeMetadata: new PropertyMetadata(
             defaultValue: null));
+
+    private void OperationListScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e) {
+        if (_OperationHeaderTransform is not null) {
+            _OperationHeaderTransform.X = -_OperationListScrollViewer.HorizontalOffset;
+        }
+    }
 
     internal static readonly DependencyProperty OperationCollectionProperty =
         OperationCollectionKey.DependencyProperty;
@@ -317,6 +332,95 @@ sealed partial class OperatorControl {
     }
 
     /// <summary>
+    /// Identifies the <see cref="OperationProgressRateHeaderTemplate"/> dependency property.
+    /// </summary>
+    public static readonly DependencyProperty OperationProgressRateHeaderTemplateProperty = DependencyProperty.Register(
+        name: nameof(OperationProgressRateHeaderTemplate),
+        propertyType: typeof(DataTemplate),
+        ownerType: typeof(OperatorControl),
+        typeMetadata: new PropertyMetadata(
+            defaultValue: null));
+
+    /// <summary>
+    /// Gets or sets the template used to display the progress rate column header.
+    /// </summary>
+    /// <value>
+    /// A template whose data context is the header text, or null to use the default label.
+    /// </value>
+    public DataTemplate OperationProgressRateHeaderTemplate {
+        get => GetValue(OperationProgressRateHeaderTemplateProperty) as DataTemplate;
+        set => SetValue(OperationProgressRateHeaderTemplateProperty, value);
+    }
+
+    /// <summary>
+    /// Identifies the <see cref="OperationProgressRateContentTemplate"/> dependency property.
+    /// </summary>
+    public static readonly DependencyProperty OperationProgressRateContentTemplateProperty =
+        DependencyProperty.Register(
+            name: nameof(OperationProgressRateContentTemplate),
+            propertyType: typeof(DataTemplate),
+            ownerType: typeof(OperatorControl),
+            typeMetadata: new PropertyMetadata(
+                defaultValue: null));
+
+    /// <summary>
+    /// Gets or sets the template used to display each operation's progress rate.
+    /// </summary>
+    /// <value>
+    /// A template whose data context is the formatted progress-rate string, or null to use the default text
+    /// display.
+    /// </value>
+    public DataTemplate OperationProgressRateContentTemplate {
+        get => GetValue(OperationProgressRateContentTemplateProperty) as DataTemplate;
+        set => SetValue(OperationProgressRateContentTemplateProperty, value);
+    }
+
+    /// <summary>
+    /// Identifies the <see cref="OperationProgressRateAverageHeaderTemplate"/> dependency property.
+    /// </summary>
+    public static readonly DependencyProperty OperationProgressRateAverageHeaderTemplateProperty =
+        DependencyProperty.Register(
+            name: nameof(OperationProgressRateAverageHeaderTemplate),
+            propertyType: typeof(DataTemplate),
+            ownerType: typeof(OperatorControl),
+            typeMetadata: new PropertyMetadata(
+                defaultValue: null));
+
+    /// <summary>
+    /// Gets or sets the template used to display the average progress rate column header.
+    /// </summary>
+    /// <value>
+    /// A template whose data context is the header text, or null to use the default label.
+    /// </value>
+    public DataTemplate OperationProgressRateAverageHeaderTemplate {
+        get => GetValue(OperationProgressRateAverageHeaderTemplateProperty) as DataTemplate;
+        set => SetValue(OperationProgressRateAverageHeaderTemplateProperty, value);
+    }
+
+    /// <summary>
+    /// Identifies the <see cref="OperationProgressRateAverageContentTemplate"/> dependency property.
+    /// </summary>
+    public static readonly DependencyProperty OperationProgressRateAverageContentTemplateProperty =
+        DependencyProperty.Register(
+            name: nameof(OperationProgressRateAverageContentTemplate),
+            propertyType: typeof(DataTemplate),
+            ownerType: typeof(OperatorControl),
+            typeMetadata: new PropertyMetadata(
+                defaultValue: null));
+
+    /// <summary>
+    /// Gets or sets the template used to display each operation's average progress rate.
+    /// </summary>
+    /// <value>
+    /// A template whose data context is the formatted average progress-rate string, or null to use the default
+    /// text display.
+    /// </value>
+    public DataTemplate OperationProgressRateAverageContentTemplate {
+        get => GetValue(OperationProgressRateAverageContentTemplateProperty) as DataTemplate;
+        set => SetValue(OperationProgressRateAverageContentTemplateProperty, value);
+    }
+
+    /// <summary>
     /// Identifies the <see cref="OperationTargetHeaderTemplate"/> dependency property.
     /// </summary>
     public static readonly DependencyProperty OperationTargetHeaderTemplateProperty = DependencyProperty.Register(
@@ -412,6 +516,31 @@ sealed partial class OperatorControl {
     /// Initializes a new operation display control.
     /// </summary>
     public OperatorControl() {
-        InitializeComponent();
+    }
+
+    /// <inheritdoc/>
+    public override void OnApplyTemplate() {
+        if (_OperationListScrollViewer is not null) {
+            _OperationListScrollViewer.ScrollChanged -= OperationListScrollViewer_ScrollChanged;
+        }
+        base.OnApplyTemplate();
+        _OperationHeaderGrid = GetTemplateChild(OperationHeaderGridTemplatePartName) as Grid;
+        _OperationHeaderTransform = null;
+        _OperationListScrollViewer = GetTemplateChild(OperationListScrollViewerTemplatePartName) as ScrollViewer;
+        if (_OperationListScrollViewer is not null) {
+            if (_OperationHeaderGrid is not null) {
+                _OperationHeaderTransform = new TranslateTransform {
+                    X = -_OperationListScrollViewer.HorizontalOffset
+                };
+                _OperationHeaderGrid.RenderTransform = _OperationHeaderTransform;
+                BindingOperations.SetBinding(
+                    _OperationHeaderGrid,
+                    FrameworkElement.MinWidthProperty,
+                    new Binding(nameof(ScrollViewer.ExtentWidth)) {
+                        Source = _OperationListScrollViewer
+                    });
+            }
+            _OperationListScrollViewer.ScrollChanged += OperationListScrollViewer_ScrollChanged;
+        }
     }
 }

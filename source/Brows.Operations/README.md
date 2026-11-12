@@ -6,7 +6,7 @@ Progress and target changes from children roll up to the root operation. Failed 
 
 For byte-valued progress, pass `kind: OperationProgressKind.FileSize` to `IOperationProgress.Change`.
 The default progress and target strings then use B, KiB, MiB, and larger binary units. Set
-`progressStringFormat` or `targetStringFormat` to customize the numeric portion of scaled values; counts
+`progressFormat` or `targetFormat` to customize the numeric portion of scaled values; counts
 below 1 KiB remain whole bytes. Pass `formatProvider` to choose the number-formatting culture. Null
 formatting arguments leave their existing settings unchanged.
 
@@ -15,8 +15,10 @@ second. The current rate samples the net change since the previous sample about 
 average is the net progress change since the operation started divided by elapsed lifetime, including
 idle time. Progress corrections can make either value negative. The bindable runtime properties raise
 `PropertyChanged` when a sample changes their value. When the operation and its descendants finish, the
-current rate becomes zero and the average freezes at its final value. File-size progress uses bytes per
-second. These display properties are not members of the public `IOperation` interface.
+current rate becomes zero and the average freezes at its final value. File-size rate strings use the same
+formatting as file-size progress, automatically scaling to B, KiB, MiB, and larger binary units. Rate strings
+contain the formatted value and unit without a `/s` suffix. These display properties are not members of the
+public `IOperation` interface.
 
 `IOperatorFactory.Create()` captures the current synchronization context when the operator is created.
 For WPF binding, create the operator on the dispatcher thread or pass its context explicitly to

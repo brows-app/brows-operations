@@ -25,14 +25,14 @@ internal class OperationBase : Notifier, IOperation {
     private static readonly PropertyChangedEventArgs ProgressPercentEvent = new(nameof(ProgressPercent));
     private static readonly PropertyChangedEventArgs ProgressRateEvent = new(nameof(ProgressRate));
     private static readonly PropertyChangedEventArgs ProgressRateAverageEvent = new(nameof(ProgressRateAverage));
+    private static readonly PropertyChangedEventArgs ProgressRateStringEvent = new(nameof(ProgressRateString));
+    private static readonly PropertyChangedEventArgs ProgressRateAverageStringEvent =
+        new(nameof(ProgressRateAverageString));
     private static readonly PropertyChangedEventArgs ProgressStringEvent = new(nameof(ProgressString));
-    private static readonly PropertyChangedEventArgs ProgressStringFormatEvent = new(nameof(ProgressStringFormat));
     private static readonly PropertyChangedEventArgs ProgressKindEvent = new(nameof(ProgressKind));
     private static readonly PropertyChangedEventArgs RelevantEvent = new(nameof(Relevant));
     private static readonly PropertyChangedEventArgs TargetEvent = new(nameof(Target));
     private static readonly PropertyChangedEventArgs TargetStringEvent = new(nameof(TargetString));
-    private static readonly PropertyChangedEventArgs TargetStringFormatEvent = new(nameof(TargetStringFormat));
-    private static readonly PropertyChangedEventArgs FormatProviderEvent = new(nameof(FormatProvider));
     private static readonly PropertyChangedEventArgs[] ProgressDependents = [ProgressPercentEvent, ProgressStringEvent];
     private static readonly PropertyChangedEventArgs[] TargetDependents = [ProgressPercentEvent, TargetStringEvent];
 
@@ -253,9 +253,11 @@ internal class OperationBase : Notifier, IOperation {
         Rate.Complete(Progress, Stopwatch?.Elapsed ?? TimeSpan.Zero);
         if (Rate.ProgressRate != previousRate) {
             NotifyPropertyChanged(ProgressRateEvent);
+            NotifyPropertyChanged(ProgressRateStringEvent);
         }
         if (Rate.ProgressRateAverage != previousAverage) {
             NotifyPropertyChanged(ProgressRateAverageEvent);
+            NotifyPropertyChanged(ProgressRateAverageStringEvent);
         }
     }
 
@@ -514,9 +516,11 @@ internal class OperationBase : Notifier, IOperation {
                     if (operation.Rate.Sample(operation.Progress, elapsedTime(operation))) {
                         if (operation.Rate.ProgressRate != previousRate) {
                             operation.NotifyPropertyChanged(ProgressRateEvent);
+                            operation.NotifyPropertyChanged(ProgressRateStringEvent);
                         }
                         if (operation.Rate.ProgressRateAverage != previousAverage) {
                             operation.NotifyPropertyChanged(ProgressRateAverageEvent);
+                            operation.NotifyPropertyChanged(ProgressRateAverageStringEvent);
                         }
                     }
                 }
@@ -598,51 +602,48 @@ internal class OperationBase : Notifier, IOperation {
 
     public double ProgressRateAverage => Synchronization.Read(() => Rate.ProgressRateAverage);
 
+    public string ProgressRateString => Synchronization.Read(() => _ProgressKind switch {
+        OperationProgressKind.FileSize =>
+            OperationFileSize.ToString(Rate.ProgressRate, _ProgressRateFormat, _FormatProvider),
+        _ => Rate.ProgressRate.ToString(_ProgressRateFormat, _FormatProvider)
+    });
+
+    public string ProgressRateAverageString => Synchronization.Read(() => _ProgressKind switch {
+        OperationProgressKind.FileSize =>
+            OperationFileSize.ToString(Rate.ProgressRateAverage, _ProgressRateAverageFormat, _FormatProvider),
+        _ => Rate.ProgressRateAverage.ToString(_ProgressRateAverageFormat, _FormatProvider)
+    });
+
     public double ProgressPercent {
         get => Synchronization.Read(() => field);
         private set => Synchronization.Update(() => field = value);
     }
 
-    public OperationProgressKind ProgressKind {
-        get => Synchronization.Read(() => _ProgressKind);
-    }
+    public OperationProgressKind ProgressKind => Synchronization.Read(() => _ProgressKind);
     private OperationProgressKind _ProgressKind;
 
-    public string TargetString {
-        get => Synchronization.Read(() => _TargetString ?? _ProgressKind switch {
-            OperationProgressKind.FileSize =>
-                OperationFileSize.ToString(_Target,
-                                           _TargetStringFormat,
-                                           _FormatProvider),
-            _ => _Target.ToString()
-        });
-    }
+    public string TargetString => Synchronization.Read(() => _TargetString ?? _ProgressKind switch {
+        OperationProgressKind.FileSize =>
+            OperationFileSize.ToString(_Target,
+                                       _TargetFormat,
+                                       _FormatProvider),
+        _ => _Target.ToString()
+    });
     private string _TargetString;
 
-    public string TargetStringFormat {
-        get => Synchronization.Read(() => _TargetStringFormat);
-    }
-    private string _TargetStringFormat;
-
-    public string ProgressString {
-        get => Synchronization.Read(() => _ProgressString ?? _ProgressKind switch {
-            OperationProgressKind.FileSize =>
-                OperationFileSize.ToString(_Progress,
-                                           _ProgressStringFormat,
-                                           _FormatProvider),
-            _ => _Progress.ToString()
-        });
-    }
+    public string ProgressString => Synchronization.Read(() => _ProgressString ?? _ProgressKind switch {
+        OperationProgressKind.FileSize =>
+            OperationFileSize.ToString(_Progress,
+                                       _ProgressFormat,
+                                       _FormatProvider),
+        _ => _Progress.ToString()
+    });
     private string _ProgressString;
 
-    public string ProgressStringFormat {
-        get => Synchronization.Read(() => _ProgressStringFormat);
-    }
-    private string _ProgressStringFormat;
-
-    public IFormatProvider FormatProvider {
-        get => Synchronization.Read(() => _FormatProvider);
-    }
+    private string _TargetFormat;
+    private string _ProgressFormat;
+    private string _ProgressRateFormat;
+    private string _ProgressRateAverageFormat;
     private IFormatProvider _FormatProvider;
 
     public string Name {
@@ -651,9 +652,7 @@ internal class OperationBase : Notifier, IOperation {
     }
     private string _Name;
 
-    public string Data {
-        get => Synchronization.Read(() => _Data);
-    }
+    public string Data => Synchronization.Read(() => _Data);
     private string _Data;
 
     public bool Relevant {
@@ -748,8 +747,10 @@ internal class OperationBase : Notifier, IOperation {
                            string name,
                            string data,
                            OperationProgressKind? kind,
-                           string progressStringFormat,
-                           string targetStringFormat,
+                           string progressFormat,
+                           string targetFormat,
+                           string progressRateFormat,
+                           string progressRateAverageFormat,
                            IFormatProvider formatProvider) {
             Operation.Synchronization.Update(() => {
                 if (name is not null) {
@@ -763,27 +764,51 @@ internal class OperationBase : Notifier, IOperation {
                     kindChanged = Operation.Change(
                         ref Operation._ProgressKind, kind.Value, ProgressKindEvent);
                 }
-                var progressStringFormatChanged = false;
-                if (progressStringFormat is not null) {
-                    progressStringFormatChanged = Operation.Change(
-                        ref Operation._ProgressStringFormat, progressStringFormat, ProgressStringFormatEvent);
+                var progressFormatChanged = false;
+                if (progressFormat is not null) {
+                    progressFormatChanged =
+                        !StringComparer.Ordinal.Equals(progressFormat, Operation._ProgressFormat);
+                    if (progressFormatChanged) {
+                        Operation._ProgressFormat = progressFormat;
+                    }
                 }
-                var targetStringFormatChanged = false;
-                if (targetStringFormat is not null) {
-                    targetStringFormatChanged = Operation.Change(
-                        ref Operation._TargetStringFormat, targetStringFormat, TargetStringFormatEvent);
+                var targetFormatChanged = false;
+                if (targetFormat is not null) {
+                    targetFormatChanged =
+                        !StringComparer.Ordinal.Equals(targetFormat, Operation._TargetFormat);
+                    if (targetFormatChanged) {
+                        Operation._TargetFormat = targetFormat;
+                    }
+                }
+                var progressRateFormatChanged = false;
+                if (progressRateFormat is not null) {
+                    progressRateFormatChanged =
+                        !StringComparer.Ordinal.Equals(Operation._ProgressRateFormat, progressRateFormat);
+                    if (progressRateFormatChanged) {
+                        Operation._ProgressRateFormat = progressRateFormat;
+                    }
+                }
+                var progressRateAverageFormatChanged = false;
+                if (progressRateAverageFormat is not null) {
+                    progressRateAverageFormatChanged =
+                        !StringComparer.Ordinal.Equals(Operation._ProgressRateAverageFormat, progressRateAverageFormat);
+                    if (progressRateAverageFormatChanged) {
+                        Operation._ProgressRateAverageFormat = progressRateAverageFormat;
+                    }
                 }
                 var formatProviderChanged = false;
-                if (formatProvider is not null && !ReferenceEquals(Operation._FormatProvider, formatProvider)) {
-                    formatProviderChanged = true;
-                    Operation._FormatProvider = formatProvider;
-                    Operation.NotifyPropertyChanged(FormatProviderEvent);
+                if (formatProvider is not null) {
+                    formatProviderChanged =
+                        !ReferenceEquals(Operation._FormatProvider, formatProvider);
+                    if (formatProviderChanged) {
+                        Operation._FormatProvider = formatProvider;
+                    }
                 }
                 var notNone = Operation._ProgressKind != OperationProgressKind.None;
                 var progressDisplayFormatChanged =
-                    kindChanged || (notNone && (progressStringFormatChanged || formatProviderChanged));
+                    kindChanged || (notNone && (progressFormatChanged || formatProviderChanged));
                 var targetDisplayFormatChanged =
-                    kindChanged || (notNone && (targetStringFormatChanged || formatProviderChanged));
+                    kindChanged || (notNone && (targetFormatChanged || formatProviderChanged));
                 var progressUsesDefault = Operation._ProgressString is null && progressString is null;
                 var targetUsesDefault = Operation._TargetString is null && targetString is null;
                 Operation.ChangeProgress(addProgress: addProgress,
@@ -805,6 +830,12 @@ internal class OperationBase : Notifier, IOperation {
                                                 !addTarget.HasValue;
                 if (notifyTargetStringChanged) {
                     Operation.NotifyPropertyChanged(TargetStringEvent);
+                }
+                if (progressRateFormatChanged || formatProviderChanged || kindChanged) {
+                    Operation.NotifyPropertyChanged(ProgressRateStringEvent);
+                }
+                if (progressRateAverageFormatChanged || formatProviderChanged || kindChanged) {
+                    Operation.NotifyPropertyChanged(ProgressRateAverageStringEvent);
                 }
                 if (addProgress.HasValue || setProgress.HasValue) {
                     Operation.RequestRateSampler();

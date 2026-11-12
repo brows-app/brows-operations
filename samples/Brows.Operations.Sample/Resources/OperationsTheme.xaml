@@ -119,61 +119,14 @@
                TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
   </DataTemplate>
   <DataTemplate x:Key="DataCellTemplate">
-    <Grid Margin="12,8" Width="226" VerticalAlignment="Center">
-      <Grid.RowDefinitions>
-        <RowDefinition Height="Auto"/>
-        <RowDefinition Height="Auto"/>
-        <RowDefinition Height="Auto"/>
-      </Grid.RowDefinitions>
-      <TextBlock Grid.Row="0" Text="{Binding}" FontSize="12" Foreground="{StaticResource MutedBrush}"
-                 TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
-      <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4,0,0">
-        <TextBlock Text="Rate " FontSize="11" Foreground="{StaticResource MutedBrush}"/>
-        <TextBlock FontSize="11" Foreground="{StaticResource AccentBrush}">
-          <TextBlock.Style>
-            <Style TargetType="TextBlock">
-              <Setter Property="Text"
-                      Value="{Binding DataContext.ProgressRate,
-                                      RelativeSource={RelativeSource AncestorType=ContentControl},
-                                      StringFormat={}{0:N2} units/s}"/>
-              <Style.Triggers>
-                <DataTrigger Value="FileSize"
-                             Binding="{Binding DataContext.ProgressKind,
-                                               RelativeSource={RelativeSource AncestorType=ContentControl}}">
-                  <Setter Property="Text"
-                          Value="{Binding DataContext.ProgressRate,
-                                          RelativeSource={RelativeSource AncestorType=ContentControl},
-                                          StringFormat={}{0:N2} B/s}"/>
-                </DataTrigger>
-              </Style.Triggers>
-            </Style>
-          </TextBlock.Style>
-        </TextBlock>
-      </StackPanel>
-      <StackPanel Grid.Row="2" Orientation="Horizontal">
-        <TextBlock Text="Average " FontSize="11" Foreground="{StaticResource MutedBrush}"/>
-        <TextBlock FontSize="11" Foreground="{StaticResource AccentBrush}">
-          <TextBlock.Style>
-            <Style TargetType="TextBlock">
-              <Setter Property="Text"
-                      Value="{Binding DataContext.ProgressRateAverage,
-                                      RelativeSource={RelativeSource AncestorType=ContentControl},
-                                      StringFormat={}{0:N2} units/s}"/>
-              <Style.Triggers>
-                <DataTrigger Value="FileSize"
-                             Binding="{Binding DataContext.ProgressKind,
-                                               RelativeSource={RelativeSource AncestorType=ContentControl}}">
-                  <Setter Property="Text"
-                          Value="{Binding DataContext.ProgressRateAverage,
-                                          RelativeSource={RelativeSource AncestorType=ContentControl},
-                                          StringFormat={}{0:N2} B/s}"/>
-                </DataTrigger>
-              </Style.Triggers>
-            </Style>
-          </TextBlock.Style>
-        </TextBlock>
-      </StackPanel>
-    </Grid>
+    <TextBlock Text="{Binding}" Margin="12,14" Width="226" VerticalAlignment="Center"
+               FontSize="12" Foreground="{StaticResource MutedBrush}"
+               TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
+  </DataTemplate>
+  <DataTemplate x:Key="ProgressRateCellTemplate">
+    <TextBlock Margin="12,14" Width="76" VerticalAlignment="Center" TextAlignment="Center"
+               FontSize="11" Foreground="{StaticResource AccentBrush}" TextTrimming="CharacterEllipsis"
+               Text="{Binding}"/>
   </DataTemplate>
   <DataTemplate x:Key="ProgressCellTemplate">
     <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="6"
@@ -320,11 +273,16 @@
     <Setter Property="OperationNameHeaderTemplate" Value="{StaticResource ColumnHeaderTemplate}"/>
     <Setter Property="OperationDataHeaderTemplate" Value="{StaticResource ColumnHeaderTemplate}"/>
     <Setter Property="OperationProgressHeaderTemplate" Value="{StaticResource ColumnHeaderTemplate}"/>
+    <Setter Property="OperationProgressRateHeaderTemplate" Value="{StaticResource ColumnHeaderTemplate}"/>
+    <Setter Property="OperationProgressRateAverageHeaderTemplate" Value="{StaticResource ColumnHeaderTemplate}"/>
     <Setter Property="OperationTargetHeaderTemplate" Value="{StaticResource ColumnHeaderTemplate}"/>
     <Setter Property="OperationDepthContentTemplate" Value="{StaticResource DepthCellTemplate}"/>
     <Setter Property="OperationNameContentTemplate" Value="{StaticResource NameCellTemplate}"/>
     <Setter Property="OperationDataContentTemplate" Value="{StaticResource DataCellTemplate}"/>
     <Setter Property="OperationProgressContentTemplate" Value="{StaticResource ProgressCellTemplate}"/>
+    <Setter Property="OperationProgressRateContentTemplate" Value="{StaticResource ProgressRateCellTemplate}"/>
+    <Setter Property="OperationProgressRateAverageContentTemplate"
+            Value="{StaticResource ProgressRateCellTemplate}"/>
     <Setter Property="OperationTargetContentTemplate" Value="{StaticResource TargetCellTemplate}"/>
   </Style>
 </ResourceDictionary>

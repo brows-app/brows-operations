@@ -3,6 +3,16 @@
 namespace Brows.Operations;
 
 internal static class OperationFileSize {
+    private static readonly string[] Units = [
+        "B",
+        "KiB",
+        "MiB",
+        "GiB",
+        "TiB",
+        "PiB",
+        "EiB"
+    ];
+
     internal static string ToString(long fileLength, string format, IFormatProvider formatProvider) {
         string unit;
         double size;
@@ -45,5 +55,26 @@ internal static class OperationFileSize {
                 return fileLength.ToString("0 B", formatProvider);
         }
         return size.ToString(frmt, formatProvider) + " " + unit;
+    }
+
+    internal static string ToString(double fileLength, string format, IFormatProvider formatProvider) {
+        var size = fileLength;
+        var absoluteSize = Math.Abs(size);
+        var unitIndex = 0;
+        while (absoluteSize >= 1024 && unitIndex < Units.Length - 1) {
+            size /= 1024;
+            absoluteSize /= 1024;
+            unitIndex++;
+        }
+
+        if (unitIndex == 0) {
+            return fileLength.ToString("0 B", formatProvider);
+        }
+
+        var numericFormat = format ?? (unitIndex switch {
+            1 => "0.#",
+            _ => "0.##"
+        });
+        return size.ToString(numericFormat, formatProvider) + " " + Units[unitIndex];
     }
 }

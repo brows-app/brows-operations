@@ -747,14 +747,14 @@ internal sealed class OperatorTests {
                 }
 
                 displayChanges.Clear();
-                reporter.Change(progressStringFormat: "0.00");
+                reporter.Change(progressFormat: "0.00");
                 using (Assert.EnterMultipleScope()) {
                     Assert.That(displayChanges, Is.EqualTo(new[] { nameof(OperationBase.ProgressString) }));
                     Assert.That(((OperationBase)operation).ProgressString, Is.EqualTo("1.50 MiB"));
                 }
 
                 displayChanges.Clear();
-                reporter.Change(targetStringFormat: "0.000");
+                reporter.Change(targetFormat: "0.000");
                 using (Assert.EnterMultipleScope()) {
                     Assert.That(displayChanges, Is.EqualTo(new[] { nameof(OperationBase.TargetString) }));
                     Assert.That(((OperationBase)operation).TargetString, Is.EqualTo("2.000 MiB"));
@@ -804,13 +804,13 @@ internal sealed class OperatorTests {
 
                 reporter.Change(formatProvider: second);
                 using (Assert.EnterMultipleScope()) {
-                    Assert.That(operation.FormatProvider, Is.SameAs(second));
                     Assert.That(operation.ProgressString, Is.EqualTo("1,5 KiB"));
                     Assert.That(operation.TargetString, Is.EqualTo("2,5 KiB"));
                     Assert.That(changes, Is.EquivalentTo(new[] {
-                        nameof(OperationBase.FormatProvider),
                         nameof(OperationBase.ProgressString),
-                        nameof(OperationBase.TargetString)
+                        nameof(OperationBase.TargetString),
+                        nameof(OperationBase.ProgressRateString),
+                        nameof(OperationBase.ProgressRateAverageString)
                     }));
                 }
 
@@ -818,7 +818,6 @@ internal sealed class OperatorTests {
                 reporter.Change(formatProvider: second);
                 reporter.Change(formatProvider: null);
                 using (Assert.EnterMultipleScope()) {
-                    Assert.That(operation.FormatProvider, Is.SameAs(second));
                     Assert.That(changes, Is.Empty);
                 }
             }

@@ -11,6 +11,16 @@ internal sealed class OperationFileSizeTest {
         Assert.That(formatted, Is.EqualTo("1.24 MiB"));
     }
 
+    [TestCase(999.5, "N1", "1000 B")]
+    [TestCase(1024, "N1", "1.0 KiB")]
+    [TestCase(1_000_000, "N2", "976.56 KiB")]
+    [TestCase(1_048_576, "N2", "1.00 MiB")]
+    public void ToString_ScalesDoubleValuesLikeLongValues(double fileLength, string format, string expected) {
+        var formatted = OperationFileSize.ToString(fileLength, format, CultureInfo.InvariantCulture);
+
+        Assert.That(formatted, Is.EqualTo(expected));
+    }
+
     [TestCase(long.MinValue, "-8 EiB")]
     [TestCase(long.MaxValue, "8 EiB")]
     public void ToString_FormatsSignedLongExtremes(long fileLength, string expected) {

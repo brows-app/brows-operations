@@ -1,5 +1,6 @@
 ﻿using Brows.Operations;
 using Brows.Windows.Data;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
@@ -9,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -19,13 +21,20 @@ namespace Brows.Windows.Controls;
 /// <summary>Tests WPF bindings, operation row presentation, and cancellation and removal commands on a dispatcher.</summary>
 [TestFixture]
 public sealed class OperatorControlTests {
+    private const int OperationRowColumnCount = 9;
+    private const int OperationStatusIndicatorColumn = 7;
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private static Operation Start(IOperator @operator, OperationDelegate task) {
+    private static Operation Start(IOperator @operator,
+                                   OperationDelegate task,
+                                   Action<Operation> beforeStart = null) {
         Operation operation = null;
         new OperationManager((OperationCollection)@operator.Operations)
-            .Operate("root", task, started => operation = started);
+            .Operate("root", task, started => {
+                operation = started;
+                beforeStart?.Invoke(started);
+            });
         return operation;
     }
 
@@ -37,10 +46,14 @@ public sealed class OperatorControlTests {
         }
     }
 
-    private static async Task Layout(OperatorControl control) {
+    private static async Task Layout(OperatorControl control, double width = 1200, double height = 600) {
+        if (!control.IsInitialized) {
+            control.BeginInit();
+            control.EndInit();
+        }
         control.ApplyTemplate();
-        control.Measure(new Size(1200, 600));
-        control.Arrange(new Rect(0, 0, 1200, 600));
+        control.Measure(new Size(width, height));
+        control.Arrange(new Rect(0, 0, width, height));
         control.UpdateLayout();
         await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         control.UpdateLayout();
@@ -189,11 +202,13 @@ public sealed class OperatorControlTests {
         var root = Start(@operator, (_, _) => Task.FromException(new IOException("expected message")));
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
-        var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == 7 && ReferenceEquals(grid.DataContext, root));
-        var error = row.Children.OfType<Control>().Single(item => Grid.GetColumn(item) == 5 &&
-            item.Template?.LoadContent() is ContentPresenter);
-        var progress = row.Children.OfType<Control>().Single(item => Grid.GetColumn(item) == 5 &&
-            item.Template?.LoadContent() is ProgressBar);
+        var row = Descendants<Grid>(control).Single(grid =>
+            grid.ColumnDefinitions.Count == OperationRowColumnCount &&
+            ReferenceEquals(grid.DataContext, root));
+        var error = row.Children.OfType<Control>().Single(item =>
+            Grid.GetColumn(item) == OperationStatusIndicatorColumn && item.Template?.LoadContent() is ContentPresenter);
+        var progress = row.Children.OfType<Control>().Single(item =>
+            Grid.GetColumn(item) == OperationStatusIndicatorColumn && item.Template?.LoadContent() is ProgressBar);
         var errorText = Descendants<TextBlock>(error).Single().Text;
         using (Assert.EnterMultipleScope()) {
             Assert.That(error.Visibility, Is.EqualTo(Visibility.Visible));
@@ -211,7 +226,8 @@ public sealed class OperatorControlTests {
             await middle.Child("leaf", (_, _) => Task.FromException(new IOException("leaf failed")))));
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
-        var rows = Descendants<Grid>(control).Where(grid => grid.ColumnDefinitions.Count == 7 && grid.DataContext is OperationBase);
+        var rows = Descendants<Grid>(control).Where(grid => grid.ColumnDefinitions.Count == OperationRowColumnCount &&
+            grid.DataContext is OperationBase);
         using (Assert.EnterMultipleScope()) {
             Assert.That(rows.Select(row => ((OperationBase)row.DataContext).Name), Is.EqualTo(new[] { "root", "middle", "leaf" }));
             Assert.That(rows.Select(row => row.Visibility), Is.All.EqualTo(Visibility.Visible));
@@ -237,14 +253,179 @@ public sealed class OperatorControlTests {
         child.Change(setProgress: 3, setTarget: 8);
         await relevant.Task.WaitAsync(Timeout);
         await Layout(control);
-        var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == 7 && ReferenceEquals(grid.DataContext, root));
+        var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == OperationRowColumnCount &&
+            ReferenceEquals(grid.DataContext, root));
         var texts = row.Children.OfType<ContentControl>()
-            .Where(item => Grid.GetColumn(item) is 3 or 4)
+            .Where(item => Grid.GetColumn(item) is 3 or 6)
             .Select(item => item.Content?.ToString())
             .ToArray();
         release.SetResult();
         await root.Completion.WaitAsync(Timeout);
         Assert.That(texts, Is.EqualTo(new[] { "3", "8" }));
+    });
+
+    /// <summary>Verifies that progress-rate columns bind their formatted values and use their templates.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task ProgressRateColumns_BindFormattedValuesAndTemplates() => WpfTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        var release = Signal();
+        var reported = Signal();
+        var relevant = Signal();
+        var root = Start(@operator, async (progress, _) => {
+            progress.Change(setProgress: 1,
+                            setTarget: 2,
+                            progressRateFormat: "N1",
+                            progressRateAverageFormat: "N3",
+                            formatProvider: System.Globalization.CultureInfo.InvariantCulture);
+            reported.TrySetResult();
+            await release.Task;
+        }, operation => {
+            operation.DisableRateSampling();
+            operation.RelevantChanged += (_, _) => {
+                if (operation.Relevant) relevant.TrySetResult();
+            };
+        });
+        var rateHeaderTemplate = new DataTemplate();
+        var averageHeaderTemplate = new DataTemplate();
+        var rateContentTemplate = new DataTemplate();
+        var averageContentTemplate = new DataTemplate();
+        var control = new OperatorControl {
+            Operator = @operator,
+            OperationProgressRateHeaderTemplate = rateHeaderTemplate,
+            OperationProgressRateAverageHeaderTemplate = averageHeaderTemplate,
+            OperationProgressRateContentTemplate = rateContentTemplate,
+            OperationProgressRateAverageContentTemplate = averageContentTemplate
+        };
+        try {
+            await reported.Task.WaitAsync(Timeout);
+            await relevant.Task.WaitAsync(Timeout);
+            root.RefreshRates(_ => TimeSpan.FromSeconds(1));
+            await Layout(control);
+            var row = Descendants<Grid>(control).Single(grid =>
+                grid.ColumnDefinitions.Count == OperationRowColumnCount && ReferenceEquals(grid.DataContext, root));
+            var rate = row.Children.OfType<ContentControl>().Single(item => Grid.GetColumn(item) == 4);
+            var average = row.Children.OfType<ContentControl>().Single(item => Grid.GetColumn(item) == 5);
+            var rateHeader = Descendants<ContentControl>(control).Single(item => Equals(item.Content, "Rate"));
+            var averageHeader = Descendants<ContentControl>(control).Single(item => Equals(item.Content, "Average"));
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(root.ProgressRateString, Is.EqualTo("1.0"));
+                Assert.That(root.ProgressRateAverageString, Is.EqualTo("1.000"));
+                Assert.That(rate.Content, Is.EqualTo("1.0"));
+                Assert.That(average.Content, Is.EqualTo("1.000"));
+                Assert.That(rate.ContentTemplate, Is.SameAs(rateContentTemplate));
+                Assert.That(average.ContentTemplate, Is.SameAs(averageContentTemplate));
+                Assert.That(rateHeader.ContentTemplate, Is.SameAs(rateHeaderTemplate));
+                Assert.That(averageHeader.ContentTemplate, Is.SameAs(averageHeaderTemplate));
+            }
+        }
+        finally {
+            release.TrySetResult();
+            await root.Completion.WaitAsync(Timeout);
+        }
+    });
+
+    /// <summary>Verifies horizontal scrolling keeps operation headers aligned with their values.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task HorizontalScroll_HeadersRemainAlignedWithOperationValues() => WpfTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        var root = Start(@operator, (_, _) => Task.FromException(new IOException("expected error")));
+        for (var i = 0; i < 20; i++) {
+            Start(@operator, (_, _) => Task.FromException(new IOException("extra error")));
+        }
+        var scrollStyle = new Style(typeof(ScrollViewer));
+        scrollStyle.Setters.Add(new Setter(
+            ScrollViewer.HorizontalScrollBarVisibilityProperty,
+            ScrollBarVisibility.Auto));
+        scrollStyle.Setters.Add(new Setter(
+            ScrollViewer.VerticalScrollBarVisibilityProperty,
+            ScrollBarVisibility.Auto));
+        var control = new OperatorControl {
+            Operator = @operator,
+            OperationScrollViewerStyle = scrollStyle
+        };
+        await Layout(control, 1094, 200);
+
+        var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == OperationRowColumnCount &&
+            ReferenceEquals(grid.DataContext, root));
+        var rate = row.Children.OfType<ContentControl>().Single(item => Grid.GetColumn(item) == 4);
+        var headerGrid = Descendants<Grid>(control).Single(grid =>
+            grid.ColumnDefinitions.Count == OperationRowColumnCount &&
+            grid.Children.OfType<ContentControl>().Any(item => Equals(item.Content, "Rate")));
+        var rateHeader = headerGrid.Children.OfType<ContentControl>()
+            .Single(item => Equals(item.Content, "Rate"));
+        var scrollViewer = (ScrollViewer)control.Template.FindName("PART_OperationListScrollViewer", control);
+        scrollViewer.ScrollToHorizontalOffset(100);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        control.UpdateLayout();
+        var verticalScrollBar = Descendants<ScrollBar>(scrollViewer)
+            .Single(bar => bar.Orientation == Orientation.Vertical);
+        var scrollViewerRight = scrollViewer.TranslatePoint(new Point(), control).X + scrollViewer.ActualWidth;
+        var verticalScrollBarRight =
+            verticalScrollBar.TranslatePoint(new Point(), control).X + verticalScrollBar.ActualWidth;
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(scrollViewer.HorizontalOffset, Is.GreaterThan(0));
+            Assert.That(scrollViewer.Style, Is.SameAs(scrollStyle));
+            Assert.That(((TranslateTransform)headerGrid.RenderTransform).X,
+                        Is.EqualTo(-scrollViewer.HorizontalOffset).Within(1));
+            Assert.That(scrollViewer.ScrollableHeight, Is.GreaterThan(0));
+            Assert.That(verticalScrollBarRight, Is.EqualTo(scrollViewerRight).Within(2));
+            Assert.That(rate.TranslatePoint(new Point(), control).X,
+                        Is.EqualTo(rateHeader.TranslatePoint(new Point(), control).X).Within(1));
+        }
+    });
+
+    /// <summary>Verifies the default scroll viewer can expose commands beyond the viewport.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task DefaultHorizontalScroll_OperationCommandsRemainReachable() => WpfTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        Start(@operator, (_, _) => Task.FromException(new IOException("expected error")));
+        var control = new OperatorControl { Operator = @operator };
+        await Layout(control, 950, 200);
+
+        var scrollViewer = (ScrollViewer)control.Template.FindName("PART_OperationListScrollViewer", control);
+        var removeButton = Descendants<Button>(control).Single(button => Equals(button.Content, "Remove"));
+        scrollViewer.ScrollToHorizontalOffset(scrollViewer.ScrollableWidth);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        control.UpdateLayout();
+
+        var scrollViewerLeft = scrollViewer.TranslatePoint(new Point(), control).X;
+        var commandLeft = removeButton.TranslatePoint(new Point(), control).X;
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(scrollViewer.HorizontalScrollBarVisibility, Is.EqualTo(ScrollBarVisibility.Auto));
+            Assert.That(scrollViewer.ScrollableWidth, Is.GreaterThan(0));
+            Assert.That(removeButton.ActualWidth, Is.GreaterThan(0));
+            Assert.That(commandLeft, Is.GreaterThanOrEqualTo(scrollViewerLeft - 1));
+            Assert.That(commandLeft + removeButton.ActualWidth,
+                        Is.LessThanOrEqualTo(scrollViewerLeft + scrollViewer.ViewportWidth + 1));
+        }
+    });
+
+    /// <summary>Verifies a supplied scroll viewer style can override automatic horizontal scrolling.</summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task HorizontalScroll_ConsumerStyleOverridesDefaultVisibility() => WpfTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        Start(@operator, (_, _) => Task.FromException(new IOException("expected error")));
+        var scrollStyle = new Style(typeof(ScrollViewer));
+        scrollStyle.Setters.Add(new Setter(
+            ScrollViewer.HorizontalScrollBarVisibilityProperty,
+            ScrollBarVisibility.Disabled));
+        var control = new OperatorControl {
+            Operator = @operator,
+            OperationScrollViewerStyle = scrollStyle
+        };
+        await Layout(control, 950, 200);
+
+        var scrollViewer = (ScrollViewer)control.Template.FindName("PART_OperationListScrollViewer", control);
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(scrollViewer.Style, Is.SameAs(scrollStyle));
+            Assert.That(scrollViewer.HorizontalScrollBarVisibility, Is.EqualTo(ScrollBarVisibility.Disabled));
+            Assert.That(scrollViewer.ScrollableWidth, Is.Zero);
+        }
     });
 
     /// <summary>Verifies that cancellation updates command eligibility and raises its change event.</summary>
@@ -421,11 +602,12 @@ public sealed class OperatorControlTests {
         var root = Start(@operator, async (progress, _) => await progress.Child("child", (_, _) => Task.FromException(new IOException("child"))));
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
-        var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == 7 && ReferenceEquals(grid.DataContext, root));
-        var error = row.Children.OfType<Control>().Single(item => Grid.GetColumn(item) == 5 &&
-            item.Template?.LoadContent() is ContentPresenter);
-        var progress = row.Children.OfType<Control>().Single(item => Grid.GetColumn(item) == 5 &&
-            item.Template?.LoadContent() is ProgressBar);
+        var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == OperationRowColumnCount &&
+            ReferenceEquals(grid.DataContext, root));
+        var error = row.Children.OfType<Control>().Single(item =>
+            Grid.GetColumn(item) == OperationStatusIndicatorColumn && item.Template?.LoadContent() is ContentPresenter);
+        var progress = row.Children.OfType<Control>().Single(item =>
+            Grid.GetColumn(item) == OperationStatusIndicatorColumn && item.Template?.LoadContent() is ProgressBar);
         using (Assert.EnterMultipleScope()) {
             Assert.That(error.Visibility, Is.EqualTo(Visibility.Collapsed));
             Assert.That(progress.Visibility, Is.EqualTo(Visibility.Visible));

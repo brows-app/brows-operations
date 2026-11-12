@@ -32,19 +32,30 @@ public interface IOperationProgress {
     /// <param name="name">A new display name, or null to leave the name unchanged.</param>
     /// <param name="data">New detail text, or null to leave the detail text unchanged.</param>
     /// <param name="kind">
-    /// The unit for reported progress and target values, or null to leave the current kind unchanged.
+    /// The unit for reported progress, target, and rate values, or null to leave the current kind unchanged.
     /// Use <see cref="OperationProgressKind.FileSize"/> when values are byte counts.
     /// </param>
-    /// <param name="progressStringFormat">
+    /// <param name="progressFormat">
     /// The numeric format string for scaled file-size progress, or null to leave the current format unchanged.
     /// Counts below 1 KiB are displayed as whole bytes.
     /// </param>
-    /// <param name="targetStringFormat">
+    /// <param name="targetFormat">
     /// The numeric format string for scaled file-size targets, or null to leave the current format unchanged.
     /// Counts below 1 KiB are displayed as whole bytes.
     /// </param>
+    /// <param name="progressRateFormat">
+    /// The numeric format string for the current progress rate, or null to leave the current format unchanged.
+    /// File-size rates use the same automatically scaled binary units as file-size progress; values below 1 KiB
+    /// are displayed as whole bytes.
+    /// </param>
+    /// <param name="progressRateAverageFormat">
+    /// The numeric format string for the average progress rate, or null to leave the current format unchanged.
+    /// File-size rates use the same automatically scaled binary units as file-size progress; values below 1 KiB
+    /// are displayed as whole bytes.
+    /// </param>
     /// <param name="formatProvider">
-    /// The provider used to format file-size values, or null to leave the current provider unchanged.
+    /// The provider used to format file-size values and progress rates, or null to leave the current provider
+    /// unchanged.
     /// When no provider has been set, the current culture is used.
     /// </param>
     /// <remarks>
@@ -64,8 +75,10 @@ public interface IOperationProgress {
                 string name = null,
                 string data = null,
                 OperationProgressKind? kind = null,
-                string progressStringFormat = null,
-                string targetStringFormat = null,
+                string progressFormat = null,
+                string targetFormat = null,
+                string progressRateFormat = null,
+                string progressRateAverageFormat = null,
                 IFormatProvider formatProvider = null);
 
     /// <summary>Starts a child operation and waits for it and its registered descendants to finish.</summary>

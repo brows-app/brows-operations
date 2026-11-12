@@ -8,6 +8,7 @@ namespace Brows;
 
 /// <summary>Demonstrates hierarchical work, progress reporting, cancellation, and failures through the operation APIs.</summary>
 sealed partial class OperationsSampleWindow : IExport {
+    private const string ProgressRateFormat = "N2";
     private IOperator _operator;
 
     [ImportRequired]
@@ -95,11 +96,15 @@ sealed partial class OperationsSampleWindow : IExport {
     }
 
     private static async Task NestedWorkflow(IOperationProgress progress, CancellationToken token) {
-        progress.Change(data: "Two folders, with two files in each folder");
+        progress.Change(data: "Two folders, with two files in each folder",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         for (var folder = 1; folder <= 2; folder++) {
             var folderNumber = folder;
             await progress.Child($"Folder {folderNumber}", async (folderProgress, folderToken) => {
-                folderProgress.Change(data: "Processing files sequentially");
+                folderProgress.Change(data: "Processing files sequentially",
+                                      progressRateFormat: ProgressRateFormat,
+                                      progressRateAverageFormat: ProgressRateFormat);
                 for (var file = 1; file <= 2; file++) {
                     var fileNumber = file;
                     await folderProgress.Child($"File {fileNumber}", (fileProgress, fileToken) =>
@@ -115,7 +120,9 @@ sealed partial class OperationsSampleWindow : IExport {
     }
 
     private static async Task ParallelBatch(IOperationProgress progress, CancellationToken token) {
-        progress.Change(data: "Four child operations run concurrently");
+        progress.Change(data: "Four child operations run concurrently",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         await progress.Children(
             Enumerable.Range(1, 4),
             item => new OperationChild(
@@ -133,7 +140,9 @@ sealed partial class OperationsSampleWindow : IExport {
                         setTarget: 4,
                         progressString: "1 unit",
                         targetString: "4 units",
-                        data: "Set values and explicit display strings");
+                        data: "Set values and explicit display strings",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         await Task.Delay(1100, token);
 
         progress.Change(addProgress: 1,
@@ -164,8 +173,10 @@ sealed partial class OperationsSampleWindow : IExport {
         progress.Change(setTarget: fileSize,
                         kind: OperationProgressKind.FileSize,
                         data: "Simulated copy; progress and target are bytes; pauses to show idle rates",
-                        targetStringFormat: "0.0",
-                        progressStringFormat: "0.0");
+                        targetFormat: "0.0",
+                        progressFormat: "0.0",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         for (long copied = 0; copied < fileSize; copied += chunkSize) {
             await Task.Delay(350, token);
             progress.Change(addProgress: chunkSize);
@@ -177,7 +188,10 @@ sealed partial class OperationsSampleWindow : IExport {
 
     private static async Task CancellableWork(IOperationProgress progress, CancellationToken token) {
         const int steps = 28;
-        progress.Change(setTarget: steps, data: "Use Cancel in this operation's row");
+        progress.Change(setTarget: steps,
+                        data: "Use Cancel in this operation's row",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         for (var step = 1; step <= steps; step++) {
             await Task.Delay(450, token);
             progress.Change(addProgress: 1, data: $"Waiting step {step} of {steps}");
@@ -185,7 +199,9 @@ sealed partial class OperationsSampleWindow : IExport {
     }
 
     private static async Task ChildFailure(IOperationProgress progress, CancellationToken token) {
-        progress.Change(data: "The child error should remain visible in the hierarchy");
+        progress.Change(data: "The child error should remain visible in the hierarchy",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         await progress.Child("Failing child", async (childProgress, childToken) => {
             await RunSteps(childProgress,
                            childToken,
@@ -198,7 +214,9 @@ sealed partial class OperationsSampleWindow : IExport {
     }
 
     private static async Task ParentFailure(IOperationProgress progress, CancellationToken token) {
-        progress.Change(data: "The parent fails while this child is still working");
+        progress.Change(data: "The parent fails while this child is still working",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         _ = progress.Child("Finishing child", (childProgress, childToken) =>
             RunSteps(childProgress,
                      childToken,
@@ -225,7 +243,11 @@ sealed partial class OperationsSampleWindow : IExport {
                                        int steps,
                                        TimeSpan delay,
                                        string action) {
-        progress.Change(setTarget: steps, name: name, data: "Starting");
+        progress.Change(setTarget: steps,
+                        name: name,
+                        data: "Starting",
+                        progressRateFormat: ProgressRateFormat,
+                        progressRateAverageFormat: ProgressRateFormat);
         for (var step = 1; step <= steps; step++) {
             await Task.Delay(delay, token);
             progress.Change(addProgress: 1, data: $"{action} {step} of {steps}");

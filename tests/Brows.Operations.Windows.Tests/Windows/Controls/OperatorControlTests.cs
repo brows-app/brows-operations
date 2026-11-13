@@ -80,7 +80,7 @@ public sealed class OperatorControlTests {
             await progress.Child("worker child", (childProgress, _) => {
                 childProgress.Change(setTarget: 1, setProgress: 1, data: "worker details");
                 return fails ? Task.FromException(new IOException("worker failure")) : Task.CompletedTask;
-            }).ConfigureAwait(false);
+            }, OperationFailureBehavior.Record, default).ConfigureAwait(false);
         });
         ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) =>
             mutationsOnDispatcher.Add(dispatcher.CheckAccess());
@@ -222,8 +222,15 @@ public sealed class OperatorControlTests {
     [Test]
     public Task RelevantDescendant_ShowsEveryAncestorRow() => WpfTestThread.Run(async () => {
         IOperator @operator = new Operator();
-        Start(@operator, async (root, _) => await root.Child("middle", async (middle, _) =>
-            await middle.Child("leaf", (_, _) => Task.FromException(new IOException("leaf failed")))));
+        Start(@operator, async (root, _) => await root.Child(
+            "middle",
+            async (middle, _) => await middle.Child(
+                "leaf",
+                (_, _) => Task.FromException(new IOException("leaf failed")),
+                OperationFailureBehavior.Record,
+                default),
+            OperationFailureBehavior.Record,
+            default));
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
         var rows = Descendants<Grid>(control).Where(grid => grid.ColumnDefinitions.Count == OperationRowColumnCount &&
@@ -242,7 +249,10 @@ public sealed class OperatorControlTests {
         var release = Signal();
         IOperationProgress child = null;
         var root = Start(@operator, async (progress, token) => {
-            _ = progress.Child("child", async (progress, _) => { child = progress; await release.Task; });
+            _ = progress.Child("child", async (progress, _) => {
+                child = progress;
+                await release.Task;
+            }, OperationFailureBehavior.Record, default);
             throw new IOException("keep parent visible");
         });
         var control = new OperatorControl { Operator = @operator };
@@ -599,7 +609,11 @@ public sealed class OperatorControlTests {
     [Test]
     public Task ParentWithOnlyChildError_ShowsItsProgressAndHidesItsOwnErrorMessage() => WpfTestThread.Run(async () => {
         IOperator @operator = new Operator();
-        var root = Start(@operator, async (progress, _) => await progress.Child("child", (_, _) => Task.FromException(new IOException("child"))));
+        var root = Start(@operator, async (progress, _) => await progress.Child(
+            "child",
+            (_, _) => Task.FromException(new IOException("child")),
+            OperationFailureBehavior.Record,
+            default));
         var control = new OperatorControl { Operator = @operator };
         await Layout(control);
         var row = Descendants<Grid>(control).Single(grid => grid.ColumnDefinitions.Count == OperationRowColumnCount &&
@@ -656,7 +670,11 @@ public sealed class OperatorControlTests {
         IOperator @operator = new Operator();
         var release = Signal();
         var root = Start(@operator, async (progress, _) => {
-            await progress.Child("failed child", (_, _) => Task.FromException(new IOException("child")));
+            await progress.Child(
+                "failed child",
+                (_, _) => Task.FromException(new IOException("child")),
+                OperationFailureBehavior.Record,
+                default);
             await release.Task;
         });
         var control = new OperatorControl { Operator = @operator };

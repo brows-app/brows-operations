@@ -19,10 +19,11 @@ internal sealed class OperationBaseCollection : IEnumerable<OperationBase> {
         Synchronization = synchronization;
     }
 
-    public void Add(OperationBase item, System.Action validate) {
+    public void Add(OperationBase item, System.Action validate, System.Action committed = null) {
         Synchronization.Update(() => {
             validate();
             Core.Add(item);
+            committed?.Invoke();
         }, () => Observable.Add(item));
     }
 

@@ -1,6 +1,8 @@
 ﻿namespace Brows.Operations;
 
-/// <summary>Starts and tracks asynchronous work as a hierarchy of operations.</summary>
+/// <summary>
+/// Starts and tracks asynchronous work as a hierarchy of operations.
+/// </summary>
 /// <remarks>
 /// The operator captures a synchronization context when it is created and uses it for observable
 /// collection changes in every operation and descendant. Progress reports, child registration,
@@ -8,13 +10,23 @@
 /// updates to their dispatcher.
 /// </remarks>
 public interface IOperator {
-    /// <summary>Gets the collection of tracked root operations.</summary>
-    /// <remarks>Successful roots are removed automatically; roots with errors remain until removed.</remarks>
+    /// <summary>
+    /// Gets the collection of tracked root operations.
+    /// </summary>
+    /// <remarks>
+    /// Successful roots are removed automatically; roots with errors remain until removed.
+    /// </remarks>
     IOperationCollection Operations { get; }
 
-    /// <summary>Starts a root operation with the supplied name and delegate.</summary>
-    /// <param name="name">The display name of the operation.</param>
-    /// <param name="task">The asynchronous work to perform.</param>
+    /// <summary>
+    /// Starts a root operation with the supplied name and delegate.
+    /// </summary>
+    /// <param name="name">
+    /// The display name of the operation.
+    /// </param>
+    /// <param name="task">
+    /// The asynchronous work to perform.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="task"/> is null.
     /// </exception>
@@ -26,10 +38,14 @@ public interface IOperator {
     /// return before their queued change is projected. See <see cref="IOperationCollection"/> for
     /// observable-delivery details. Progress state changes are synchronized by the operation tree,
     /// though property-change notifications run on the thread making each update. This method does
-    /// not change the delegate's execution context or normal await context capture.
-    /// Delegate errors are recorded on the operation, whose lifetime includes all
-    /// registered descendants. Requested cancellation is treated as completion without an error
-    /// unless the delegate or a descendant records another failure.
+    /// not change the delegate's execution context or normal await context capture. Delegate errors
+    /// are recorded on the operation, whose lifetime includes its returned task and all registered
+    /// descendants. An <see cref="OperationCanceledException"/> is treated as cancellation only when
+    /// the operation token is canceled, or when its exception token is canceled and is a token known to
+    /// the operation tree: an operation token or a token supplied when registering children. Any other
+    /// cancellation exception, including a timeout from a token source created by the delegate, is
+    /// recorded as an error. Requested cancellation completes without an error unless the delegate or a
+    /// descendant records another failure.
     /// </remarks>
     void Operate(string name, OperationDelegate task);
 }

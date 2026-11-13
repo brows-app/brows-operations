@@ -139,9 +139,13 @@ internal sealed class SynchronizationTests {
                     await progress.Children(new[] { 1, 2 }, index => new OperationChild($"child {index}",
                         async (childProgress, _) => {
                             await Task.Run(async () => {
-                                await childProgress.Child("grandchild", (_, _) => Task.CompletedTask);
+                                await childProgress.Child(
+                                    "grandchild",
+                                    (_, _) => Task.CompletedTask,
+                                    OperationFailureBehavior.Record,
+                                    default);
                             }, CancellationToken.None).ConfigureAwait(false);
-                        })).ConfigureAwait(false);
+                        }), OperationFailureBehavior.Record, default).ConfigureAwait(false);
                 };
                 @operator.Operate("root", task);
                 root = (Operation)@operator.Operations.Snapshot().Single();
@@ -272,7 +276,7 @@ internal sealed class SynchronizationTests {
         @operator.Operate("root", async (progress, _) => {
             await release.Task.ConfigureAwait(false);
             registrationThread = Environment.CurrentManagedThreadId;
-            await progress.Child("child", (_, _) => Task.CompletedTask);
+            await progress.Child("child", (_, _) => Task.CompletedTask, OperationFailureBehavior.Record, default);
         });
         var childThread = 0;
         ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) => {

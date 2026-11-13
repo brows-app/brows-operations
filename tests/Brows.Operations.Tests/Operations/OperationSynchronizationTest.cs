@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using System;
 
 namespace Brows.Operations;
 
@@ -107,6 +108,67 @@ internal sealed class OperationSynchronizationTest {
         using (Assert.EnterMultipleScope()) {
             Assert.That(observed, Is.SameAs(error));
             Assert.That(changes, Is.EqualTo(new[] { "second collection", "first collection", "next notification" }));
+        }
+    }
+
+    /// <summary>
+    /// Verifies a required collection-drain failure does not replace an earlier listener failure.
+    /// </summary>
+    [Test]
+    public void ListenerAndRequiredCollectionFailures_AggregateBothOriginalExceptions() {
+        var synchronization = new OperationSynchronization(null);
+        var listenerFailure = new IOException("listener");
+        var collectionFailure = new IOException("collection");
+        var observed = Assert.Catch<AggregateException>(() => synchronization.Update(
+            () => synchronization.Notify(() => throw listenerFailure),
+            () => throw collectionFailure));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(observed.InnerExceptions, Has.Count.EqualTo(2));
+            Assert.That(observed.InnerExceptions[0], Is.SameAs(listenerFailure));
+            Assert.That(observed.InnerExceptions[1], Is.SameAs(collectionFailure));
+        }
+    }
+
+    /// <summary>
+    /// Verifies a notification drain does not replace an exception thrown by the state update.
+    /// </summary>
+    [Test]
+    public void UpdateAndNotificationFailures_AggregateBothOriginalExceptions() {
+        var synchronization = new OperationSynchronization(null);
+        var updateFailure = new IOException("update");
+        var notificationFailure = new IOException("notification");
+        var observed = Assert.Catch<AggregateException>(() => synchronization.Update(() => {
+            synchronization.Notify(() => throw notificationFailure);
+            throw updateFailure;
+        }));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(observed.InnerExceptions, Has.Count.EqualTo(2));
+            Assert.That(observed.InnerExceptions[0], Is.SameAs(updateFailure));
+            Assert.That(observed.InnerExceptions[1], Is.SameAs(notificationFailure));
+        }
+    }
+
+    /// <summary>
+    /// Verifies internally combined failures keep a user-created AggregateException as one original failure.
+    /// </summary>
+    [Test]
+    public void RequiredDrainAggregation_DoesNotFlattenUserAggregateException() {
+        var synchronization = new OperationSynchronization(null);
+        var userAggregate = new AggregateException(
+            "user",
+            new IOException("user first"),
+            new IOException("user second"));
+        var collectionFailure = new IOException("collection");
+        var observed = Assert.Catch<AggregateException>(() => synchronization.Update(
+            () => synchronization.Notify(() => throw userAggregate),
+            () => throw collectionFailure));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(observed.InnerExceptions, Has.Count.EqualTo(2));
+            Assert.That(observed.InnerExceptions[0], Is.SameAs(userAggregate));
+            Assert.That(observed.InnerExceptions[1], Is.SameAs(collectionFailure));
         }
     }
 }

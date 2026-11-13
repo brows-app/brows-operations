@@ -1,6 +1,7 @@
 ﻿using Brows.Collections;
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace Brows.Operations;
@@ -28,12 +29,20 @@ internal sealed class OperationSynchronization {
             try {
                 notification.Callback();
             }
-            catch {
+            catch (Exception ex) {
                 /*
                  * A listener failure must not leave committed collection changes without a scheduled drain.
                  */
-                DrainNotifications(notifications, requiredOnly: true);
-                throw;
+                var failure = ExceptionDispatchInfo.Capture(ex);
+                try {
+                    DrainNotifications(notifications, requiredOnly: true);
+                }
+                catch (Exception requiredFailure) {
+                    OperationInfrastructureAggregateException.Combine(
+                        failure,
+                        ExceptionDispatchInfo.Capture(requiredFailure)).Throw();
+                }
+                failure.Throw();
             }
         }
     }
@@ -86,10 +95,15 @@ internal sealed class OperationSynchronization {
     public T Update<T>(Func<T> update) {
         var outermost = Notifications is null;
         var notifications = Notifications ??= new();
+        var result = default(T);
+        ExceptionDispatchInfo failure = null;
         try {
             lock (Gate) {
-                return update();
+                result = update();
             }
+        }
+        catch (Exception ex) {
+            failure = ExceptionDispatchInfo.Capture(ex);
         }
         finally {
             if (outermost) {
@@ -100,11 +114,19 @@ internal sealed class OperationSynchronization {
                      */
                     DrainNotifications(notifications);
                 }
+                catch (Exception notificationFailure) {
+                    var captured = ExceptionDispatchInfo.Capture(notificationFailure);
+                    failure = failure is null
+                        ? captured
+                        : OperationInfrastructureAggregateException.Combine(failure, captured);
+                }
                 finally {
                     Notifications = null;
                 }
             }
         }
+        failure?.Throw();
+        return result;
     }
 
     public void Notify(Action notification) {

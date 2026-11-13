@@ -17,8 +17,12 @@ public sealed class OperationChild {
     /// <summary>
     /// Initializes a child operation description.
     /// </summary>
-    /// <param name="name">The child's initial display name.</param>
-    /// <param name="task">The child's work delegate; it must be non-null when the child is started.</param>
+    /// <param name="name">
+    /// The child's initial display name.
+    /// </param>
+    /// <param name="task">
+    /// The child's work delegate; it must be non-null when the child is started.
+    /// </param>
     /// <remarks>
     /// This constructor stores the supplied values; delegate validation occurs when the child is started.
     /// </remarks>

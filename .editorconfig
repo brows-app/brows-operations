@@ -5,6 +5,8 @@ root = true
 indent_style = space
 trim_trailing_whitespace = true
 end_of_line = lf
+rulers = 120
+max_line_length = 120
 
 [.editorconfig]
 end_of_line = lf

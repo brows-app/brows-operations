@@ -30,7 +30,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         }
     }
 
-    private Operation[] SnapshotCore() =>
+    private Operation[] Snapshot() =>
         OperationSync.Read(() => Core.ToArray());
 
     protected override void OnPropertyChanged(PropertyChangedEventArgs e) {
@@ -79,36 +79,39 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
         }
         var removed = false;
         var relevanceChanged = false;
-        OperationSync.Update(() => {
-            if (!item.Complete) {
-                return;
-            }
-            removed = Core.Remove(item);
-            if (removed) {
-                if (item.Relevant) {
-                    Relevance--;
-                    relevanceChanged = true;
+        OperationSync.Update(
+            update: () => {
+                if (!item.Complete) {
+                    return;
                 }
-                item.RelevantCommitted -= Item_RelevantCommitted;
-                item.OnRemovedFromCollection();
-            }
-        }, () => {
-            if (removed) {
-                Observable.Remove(item);
-            }
-        }, () => {
-            if (removed) {
-                if (relevanceChanged) {
-                    NotifyPropertyChanged(RelevanceEvent, RelevanceDependents);
+                removed = Core.Remove(item);
+                if (removed) {
+                    if (item.Relevant) {
+                        Relevance--;
+                        relevanceChanged = true;
+                    }
+                    item.RelevantCommitted -= Item_RelevantCommitted;
+                    item.OnRemovedFromCollection();
                 }
-                NotifyPropertyChanged(CountEvent);
-            }
-        });
+            },
+            collectionChange: () => {
+                if (removed) {
+                    Observable.Remove(item);
+                }
+            },
+            afterUpdate: () => {
+                if (removed) {
+                    if (relevanceChanged) {
+                        NotifyPropertyChanged(RelevanceEvent, RelevanceDependents);
+                    }
+                    NotifyPropertyChanged(CountEvent);
+                }
+            });
         return removed;
     }
 
     IReadOnlyList<IOperation> IOperationCollection.Snapshot() =>
-        SnapshotCore();
+        Snapshot();
 
     bool IOperationCollection.Remove(IOperation item) =>
         Remove(item as Operation);
@@ -120,7 +123,7 @@ internal sealed class OperationCollection : Notifier, IOperationCollection {
             _ => i => i.Complete
         };
         var removed = 0;
-        foreach (var item in SnapshotCore().Where(item => predicate(item))) {
+        foreach (var item in Snapshot().Where(item => predicate(item))) {
             if (Remove(item)) {
                 removed++;
             }

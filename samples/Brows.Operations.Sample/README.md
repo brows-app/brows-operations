@@ -10,6 +10,12 @@ dotnet run --project samples/Brows.Operations.Sample
 
 **Run showcase** starts nested work, a cancellable task, and an intentional child failure together. The individual scenario buttons demonstrate parallel children, explicit progress labels, successful completion, and a parent that fails while its child is still working. Work lasts long enough to inspect the hierarchy and use Cancel. Successful operations disappear automatically; failures remain until removed. **Clear finished** calls `IOperationCollection.RemoveComplete()` to remove completed roots. Pass `withError: true` or `withError: false` to remove only failed or successful roots, respectively.
 
+The nested workflow uses `OperationFailureBehavior.Throw` because each folder's next file depends on
+the previous file finishing successfully. The parallel batch uses `Record` and displays its succeeded,
+failed, and canceled counts; batch item 3 fails on purpose so the failed outcome is visible in the
+operation hierarchy. A batch waits for all started items before returning. Child-only cancellation is
+an outcome under `Record`, while parent or supplied-token cancellation propagates after started work joins.
+
 Each operation row shows **Rate** and **Average** in separate columns. Rates are sampled about once
 per second; ordinary progress uses units per second and file-size progress rates are automatically scaled
 to B, KiB, MiB, and larger binary units. The simulated file copy pauses for 2.5 seconds halfway

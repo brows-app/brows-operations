@@ -29,7 +29,7 @@ void StartCopy(IOperatorFactory operatorFactory) {
         progress.Change(data: "Starting");
         token.ThrowIfCancellationRequested();
 
-        await progress.Children(Enumerable.Range(1, 3), file => new OperationChild(
+        var batch = await progress.Children(Enumerable.Range(1, 3), file => new OperationChild(
             $"File {file}",
             async (childProgress, childToken) => {
                 childProgress.Change(setTarget: 1,
@@ -37,10 +37,41 @@ void StartCopy(IOperatorFactory operatorFactory) {
                                     data: "Copying");
                 await Task.Delay(TimeSpan.FromMilliseconds(250), childToken);
                 childProgress.Change(addProgress: 1, data: "Copied");
-            }));
+            }), OperationFailureBehavior.Record, default);
+
+        foreach (var result in batch.Results.Where(result => result.Kind == OperationResultKind.Failed)) {
+            progress.Change(data: $"A file copy failed: {result.Error.Message}");
+        }
     });
 }
 ```
+
+`Child` and `Children` require a failure policy and an additional cancellation token. Pass `default` when
+no extra token is needed; each child still inherits cancellation from its parent. Use `Throw` when the
+next step depends on the current child succeeding:
+
+```csharp
+await progress.Child("Prepare", (_, token) => Task.Delay(TimeSpan.FromMilliseconds(100), token),
+                     OperationFailureBehavior.Throw, default);
+await progress.Child("Use prepared data", (_, token) => Task.Delay(TimeSpan.FromMilliseconds(100), token),
+                     OperationFailureBehavior.Throw, default);
+```
+
+`Record` records ordinary work failures and returns their outcomes. `Throw` records the same failures
+and also propagates them. A single distinct failure keeps its original exception; multiple distinct
+failures are returned or thrown as an aggregate. Failures anywhere in a descendant tree affect the
+child's outcome, and an ordinary failure takes precedence over child-only cancellation. Infrastructure
+errors have highest precedence. Cancellation of the parent or supplied token takes precedence over the
+work outcome and always propagates after started children finish; recorded work failures remain on the
+operation tree. Child-only cancellation is returned under `Record` and propagated under `Throw`.
+Caught child failures remain recorded in the operation tree.
+
+An operation finishes only after its delegate task and registered descendants finish, including asynchronous
+cleanup or disposal represented by the returned task. Keep ownership of staged resources until awaiting
+`Child` returns a result whose `Kind` is `OperationResultKind.Succeeded`. A `Children` batch waits for every
+started sibling after a failure. Returning
+null from its factory skips an item, which has no result; its supplied token cancels every started batch child
+and stops further registration without canceling the parent or unrelated operations.
 
 `Change` supports adding or setting progress and target values, as well as updating the operation name, detail text, and display strings. Child progress and targets roll up to their parents. `Child` creates one child task; `Children` creates and awaits a set of children.
 
@@ -96,7 +127,7 @@ operations.Operate("Background work", async (progress, token) => {
         await progress.Child("Child work", async (childProgress, childToken) => {
             await Task.Delay(250, childToken).ConfigureAwait(false);
             childProgress.Change(setProgress: 1, setTarget: 1);
-        });
+        }, OperationFailureBehavior.Record, default);
     }, token);
 });
 ```

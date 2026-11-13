@@ -23,6 +23,19 @@ internal sealed class OperatorTests {
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    private static Task ThrowSynchronously(Exception exception) {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception).Throw();
+        throw new InvalidOperationException("ExceptionDispatchInfo.Throw returned unexpectedly.");
+    }
+
+    private static Task CancelThroughSuppliedToken(IOperationProgress progress,
+                                                   CancellationTokenSource source,
+                                                   OperationCanceledException cancellation) =>
+        progress.Child("canceled", (_, _) => {
+            source.Cancel();
+            return Task.FromException(cancellation);
+        }, OperationFailureBehavior.Record, source.Token);
+
     private static T GetPrivateField<T>(OperationBase operation, string fieldName) =>
         (T)typeof(OperationBase)
             .GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
@@ -406,38 +419,44 @@ internal sealed class OperatorTests {
             return Task.CompletedTask;
         });
 
-    /// <summary>Verifies that the batch result reports whether any child operations were created.</summary>
+    /// <summary>
+    /// Verifies that the batch result contains one successful outcome for each created child.
+    /// </summary>
     /// <param name="childCount">The number of child operations to create.</param>
-    /// <param name="expected">The expected batch result.</param>
     /// <returns>A task representing execution of the test.</returns>
-    [TestCase(0, false)]
-    [TestCase(1, true)]
-    [TestCase(3, true)]
-    public Task Children_ReturnsWhetherItCreatedAnyOperations(int childCount, bool expected) =>
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(3)]
+    public Task Children_ReturnsResultsAndCountsForCreatedOperations(int childCount) =>
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             var factoryCalls = 0;
-            var result = false;
+            OperationBatchResult result = null;
             @operator.Operate("parent", async (progress, _) => {
                 result = await progress.Children(Enumerable.Range(0, childCount), index => {
                     factoryCalls++;
                     return new OperationChild(index.ToString(), (_, _) => Task.CompletedTask);
-                });
+                }, OperationFailureBehavior.Record, default);
             });
 
             using (Assert.EnterMultipleScope()) {
-                Assert.That(result, Is.EqualTo(expected));
+                Assert.That(result.Results.Count, Is.EqualTo(childCount));
+                Assert.That(result.SucceededCount, Is.EqualTo(childCount));
+                Assert.That(result.FailedCount, Is.Zero);
+                Assert.That(result.CanceledCount, Is.Zero);
                 Assert.That(factoryCalls, Is.EqualTo(childCount));
             }
         });
 
-    /// <summary>Verifies that a batch skips null child descriptions and reports whether other children were created.</summary>
+    /// <summary>
+    /// Verifies that a batch skips null descriptions and returns results for started children only.
+    /// </summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Children_SkipsNullChildrenAndReportsWhetherAnyWereCreated() =>
+    public Task Children_SkipsNullDescriptionsInResults() =>
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            var result = false;
+            OperationBatchResult result = null;
             var factoryCalls = 0;
             @operator.Operate("parent", async (progress, _) => {
                 result = await progress.Children(new[] { 0, 1, 2 }, index => {
@@ -445,28 +464,193 @@ internal sealed class OperatorTests {
                     return index == 1
                         ? null
                         : new OperationChild(index.ToString(), (_, _) => Task.CompletedTask);
-                });
+                }, OperationFailureBehavior.Record, default);
             });
 
             using (Assert.EnterMultipleScope()) {
-                Assert.That(result, Is.True);
+                Assert.That(result.Results.Count, Is.EqualTo(2));
+                Assert.That(result.SucceededCount, Is.EqualTo(2));
                 Assert.That(factoryCalls, Is.EqualTo(3));
             }
         });
 
-    /// <summary>Verifies that a batch returns false when every child description is null.</summary>
+    /// <summary>
+    /// Verifies that a batch returns an empty result when every child description is null.
+    /// </summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Children_WithOnlyNullChildren_ReturnsFalse() =>
+    public Task Children_WithOnlyNullDescriptionsReturnsEmptyResult() =>
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            var result = true;
+            OperationBatchResult result = null;
             @operator.Operate("parent", async (progress, _) => {
-                result = await progress.Children(new[] { 1, 2 }, _ => null);
+                result = await progress.Children(new[] { 1, 2 }, _ => null, OperationFailureBehavior.Record, default);
             });
 
-            Assert.That(result, Is.False);
+            Assert.That(result.Results, Is.Empty);
+            Assert.That(result.SucceededCount, Is.Zero);
+            Assert.That(result.FailedCount, Is.Zero);
+            Assert.That(result.CanceledCount, Is.Zero);
         });
+
+    /// <summary>
+    /// Verifies mixed batch outcomes preserve source order and omit skipped items.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_RecordReturnsMixedOutcomesInSourceOrder() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        using var cancellationSource = new CancellationTokenSource();
+        var firstFailure = new IOException("batch child failure");
+        var cancellation = new OperationCanceledException("batch child cancellation", cancellationSource.Token);
+        OperationBatchResult result = null;
+        var operation = Start(@operator, "mixed batch", async (progress, _) => {
+            result = await progress.Children(Enumerable.Range(0, 5), item => item switch {
+                1 => null,
+                2 => new OperationChild("failed", (_, _) => Task.FromException(firstFailure)),
+                3 => new OperationChild("canceled", (childProgress, _) =>
+                    CancelThroughSuppliedToken(childProgress, cancellationSource, cancellation)),
+                _ => new OperationChild(item.ToString(), (_, _) => Task.CompletedTask)
+            }, OperationFailureBehavior.Record, default);
+        });
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(result.Results.Select(item => item.Kind), Is.EqualTo(new[] {
+                OperationResultKind.Succeeded,
+                OperationResultKind.Failed,
+                OperationResultKind.Canceled,
+                OperationResultKind.Succeeded
+            }));
+            Assert.That(result.SucceededCount, Is.EqualTo(2));
+            Assert.That(result.FailedCount, Is.EqualTo(1));
+            Assert.That(result.CanceledCount, Is.EqualTo(1));
+            Assert.That(result.Results[1].Error, Is.SameAs(firstFailure));
+            Assert.That(result.Results[2].Error, Is.SameAs(cancellation));
+        }
+    });
+
+    /// <summary>
+    /// Verifies Throw batches start and join all siblings before returning distinct failures.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_ThrowWaitsForSlowSiblingAndAggregatesFailures() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        var allStarted = NewSignal();
+        var releaseSlowSibling = NewSignal();
+        var firstFailure = new IOException("same batch child failure");
+        var secondFailure = new IOException("same batch child failure");
+        var factoryCalls = 0;
+        var startedCount = 0;
+        Task<OperationBatchResult> batch = null;
+        Exception propagated = null;
+        var operation = Start(@operator, "throwing batch", async (progress, _) => {
+            void MarkStarted() {
+                if (Interlocked.Increment(ref startedCount) == 3) {
+                    allStarted.TrySetResult();
+                }
+            }
+
+            try {
+                batch = progress.Children(new[] { 0, 1, 2 }, item => {
+                    factoryCalls++;
+                    if (item == 0) {
+                        return new OperationChild(item.ToString(), (_, _) => {
+                            MarkStarted();
+                            return ThrowSynchronously(firstFailure);
+                        });
+                    }
+                    if (item == 1) {
+                        return new OperationChild(item.ToString(), async (_, _) => {
+                            MarkStarted();
+                            await releaseSlowSibling.Task;
+                            throw secondFailure;
+                        });
+                    }
+                    return new OperationChild(item.ToString(), (_, _) => {
+                        MarkStarted();
+                        return Task.CompletedTask;
+                    });
+                }, OperationFailureBehavior.Throw, default);
+                await batch;
+            }
+            catch (Exception ex) {
+                propagated = ex;
+            }
+        });
+
+        try {
+            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(factoryCalls, Is.EqualTo(3));
+            Assert.That(batch.IsCompleted, Is.False);
+        }
+        finally {
+            releaseSlowSibling.TrySetResult();
+            try {
+                await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception) {
+            }
+        }
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.That(propagated, Is.InstanceOf<AggregateException>());
+        var aggregate = (AggregateException)propagated;
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(aggregate.InnerExceptions, Has.Count.EqualTo(2));
+            Assert.That(aggregate.InnerExceptions[0], Is.SameAs(firstFailure));
+            Assert.That(aggregate.InnerExceptions[1], Is.SameAs(secondFailure));
+            Assert.That(operation.CompleteWithError, Is.True);
+        }
+    });
+
+    /// <summary>
+    /// Verifies Throw propagates the first cancellation unless any child failed, which takes precedence.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_ThrowUsesFailureAndCancellationPrecedence() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        using var firstCancellationSource = new CancellationTokenSource();
+        using var secondCancellationSource = new CancellationTokenSource();
+        using var mixedCancellationSource = new CancellationTokenSource();
+        var firstCancellation = new OperationCanceledException("same cancellation", firstCancellationSource.Token);
+        var secondCancellation = new OperationCanceledException("same cancellation", secondCancellationSource.Token);
+        var failure = new IOException("failure wins over cancellation");
+        Exception onlyCancellations = null;
+        Exception mixedOutcomes = null;
+        var operation = Start(@operator, "batch precedence", async (progress, _) => {
+            try {
+                await progress.Children(new[] { 1, 2 }, item => new OperationChild(item.ToString(), (child, _) =>
+                    item == 1
+                        ? CancelThroughSuppliedToken(child, firstCancellationSource, firstCancellation)
+                        : CancelThroughSuppliedToken(child, secondCancellationSource, secondCancellation)),
+                    OperationFailureBehavior.Throw, default);
+            }
+            catch (Exception ex) {
+                onlyCancellations = ex;
+            }
+            try {
+                await progress.Children(new[] { 1, 2 }, item => new OperationChild(item.ToString(), (child, _) =>
+                    item == 1
+                        ? CancelThroughSuppliedToken(child, mixedCancellationSource, firstCancellation)
+                        : Task.FromException(failure)),
+                    OperationFailureBehavior.Throw, default);
+            }
+            catch (Exception ex) {
+                mixedOutcomes = ex;
+            }
+        });
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(onlyCancellations, Is.SameAs(firstCancellation));
+            Assert.That(mixedOutcomes, Is.SameAs(failure));
+            Assert.That(operation.Error, Is.Null);
+            Assert.That(operation.CompleteWithError, Is.True);
+        }
+    });
 
     /// <summary>Verifies that batch creation evaluates the child factory for each source item.</summary>
     /// <returns>A task representing execution of the test.</returns>
@@ -479,7 +663,7 @@ internal sealed class OperatorTests {
                 await progress.Children(Enumerable.Range(0, 5), index => {
                     factoryCalls++;
                     return new OperationChild(index.ToString(), (_, _) => Task.CompletedTask);
-                });
+                }, OperationFailureBehavior.Record, default);
             });
 
             Assert.That(factoryCalls, Is.EqualTo(5));
@@ -499,7 +683,7 @@ internal sealed class OperatorTests {
                     index.ToString(), async (_, _) => {
                         startedCount++;
                         await release.Task;
-                    }));
+                    }), OperationFailureBehavior.Record, default);
                 childrenStarted.TrySetResult(startedCount);
                 await children;
             });
@@ -527,8 +711,13 @@ internal sealed class OperatorTests {
         UiTestThread.Run(async () => {
             var @operator = CreateOperator();
             @operator.Operate("parent", async (progress, _) => {
-                await progress.Children(new[] { 1 }, _ => new OperationChild(
-                    "child", (_, _) => Task.FromException(new IOException("child failed"))));
+                await progress.Children(
+                    new[] { 1 },
+                    _ => new OperationChild(
+                        "child",
+                        (_, _) => Task.FromException(new IOException("child failed"))),
+                    OperationFailureBehavior.Record,
+                    default);
             });
             var parent = (OperationBase)@operator.Operations.Snapshot().Single();
             var child = (await WaitForChildren(parent)).Single();
@@ -560,7 +749,7 @@ internal sealed class OperatorTests {
                 _ = progress.Child("child", async (_, _) => {
                     childStarted.TrySetResult();
                     await release.Task;
-                });
+                }, OperationFailureBehavior.Record, default);
                 throw new IOException("parent failed");
             });
             try {
@@ -596,8 +785,8 @@ internal sealed class OperatorTests {
                     await childProgress.Child("grandchild", (grandchildProgress, _) => {
                         grandchildProgress.Change(addProgress: 2, addTarget: 4);
                         return Task.CompletedTask;
-                    });
-                });
+                    }, OperationFailureBehavior.Record, default);
+                }, OperationFailureBehavior.Record, default);
             });
             var child = (await WaitForChildren(root)).Single();
             var grandchild = (await WaitForChildren(child)).Single();
@@ -630,7 +819,7 @@ internal sealed class OperatorTests {
                     childProgress.Change(setProgress: 3, setTarget: 4);
                     childProgress.Change(setProgress: 1, setTarget: 2);
                     return Task.CompletedTask;
-                });
+                }, OperationFailureBehavior.Record, default);
             });
             var child = (await WaitForChildren(root)).Single();
 
@@ -906,58 +1095,284 @@ internal sealed class OperatorTests {
                 return Task.CompletedTask;
             });
 
-            Assert.That(async () => await savedProgress.Child("late", (_, _) => Task.CompletedTask),
-                        Throws.InvalidOperationException);
+            Assert.That(
+                async () => await savedProgress.Child(
+                    "late",
+                    (_, _) => Task.CompletedTask,
+                    OperationFailureBehavior.Record,
+                    default),
+                Throws.InvalidOperationException);
         });
 
     /// <summary>Verifies that child registration rejects a null work delegate.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Child_RejectsANullTask() =>
-        UiTestThread.Run(async () => {
+    public Task Child_RejectsANullTask() => UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            @operator.Operate("parent", async (progress, _) => await progress.Child("invalid", null));
-            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
+            Exception propagated = null;
+            var operation = Start(@operator, "parent", async (progress, _) => {
+                try {
+                    await progress.Child("invalid", null, OperationFailureBehavior.Record, default);
+                }
+                catch (Exception ex) {
+                    propagated = ex;
+                }
+            });
+            await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
             using (Assert.EnterMultipleScope()) {
-                Assert.That(operation.Error, Is.InstanceOf<ArgumentNullException>());
-                Assert.That(operation.CompleteWithError, Is.True);
+                Assert.That(propagated, Is.InstanceOf<ArgumentNullException>());
+                Assert.That(operation.Error, Is.Null);
+                Assert.That(operation.CompleteWithError, Is.False);
+                Assert.That(((IList)operation.ChildSource).Count, Is.Zero);
             }
         });
 
     /// <summary>Verifies that batch creation rejects a null source sequence.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Children_RejectsANullSource() =>
-        UiTestThread.Run(() => {
+    public Task Children_RejectsANullSource() => UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            @operator.Operate("parent", async (progress, _) =>
-                await progress.Children<int>(null, _ => null));
-            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
+            Exception propagated = null;
+            var factoryCalls = 0;
+            var operation = Start(@operator, "parent", async (progress, _) => {
+                try {
+                    await progress.Children<int>(null, _ => {
+                        factoryCalls++;
+                        return null;
+                    }, OperationFailureBehavior.Record, default);
+                }
+                catch (Exception ex) {
+                    propagated = ex;
+                }
+            });
+            await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
             using (Assert.EnterMultipleScope()) {
-                Assert.That(operation.Error, Is.InstanceOf<ArgumentNullException>());
-                Assert.That(operation.CompleteWithError, Is.True);
+                Assert.That(propagated, Is.InstanceOf<ArgumentNullException>());
+                Assert.That(factoryCalls, Is.Zero);
+                Assert.That(operation.Error, Is.Null);
+                Assert.That(operation.CompleteWithError, Is.False);
             }
-            return Task.CompletedTask;
         });
 
     /// <summary>Verifies that batch creation rejects a null child factory.</summary>
     /// <returns>A task representing execution of the test.</returns>
     [Test]
-    public Task Children_RejectsANullFactory() =>
-        UiTestThread.Run(() => {
+    public Task Children_RejectsANullFactory() => UiTestThread.Run(async () => {
             var @operator = CreateOperator();
-            @operator.Operate("parent", async (progress, _) =>
-                await progress.Children(Array.Empty<int>(), null));
-            var operation = (OperationBase)@operator.Operations.Snapshot().Single();
+            Exception propagated = null;
+            var operation = Start(@operator, "parent", async (progress, _) => {
+                try {
+                    await progress.Children(Array.Empty<int>(), null, OperationFailureBehavior.Record, default);
+                }
+                catch (Exception ex) {
+                    propagated = ex;
+                }
+            });
+            await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
             using (Assert.EnterMultipleScope()) {
-                Assert.That(operation.Error, Is.InstanceOf<ArgumentNullException>());
-                Assert.That(operation.CompleteWithError, Is.True);
+                Assert.That(propagated, Is.InstanceOf<ArgumentNullException>());
+                Assert.That(operation.Error, Is.Null);
+                Assert.That(operation.CompleteWithError, Is.False);
             }
-            return Task.CompletedTask;
         });
+
+    /// <summary>
+    /// Verifies a factory description without a delegate fails before any child is registered.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_RejectsNullDelegateInFactoryDescription() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        var factoryCalls = 0;
+        Exception propagated = null;
+        var operation = Start(@operator, "null child delegate", async (progress, _) => {
+            try {
+                await progress.Children(new[] { 1, 2 }, _ => {
+                    factoryCalls++;
+                    return new OperationChild("invalid", null);
+                }, OperationFailureBehavior.Record, default);
+            }
+            catch (Exception ex) {
+                propagated = ex;
+            }
+        });
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(propagated, Is.InstanceOf<ArgumentNullException>());
+            Assert.That(factoryCalls, Is.EqualTo(1));
+            Assert.That(((IList)operation.ChildSource).Count, Is.Zero);
+            Assert.That(operation.Error, Is.Null);
+            Assert.That(operation.CompleteWithError, Is.False);
+        }
+    });
+
+    /// <summary>
+    /// Verifies a pre-canceled batch token stops before enumerating or invoking factories.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_PreCanceledTokenDoesNotEnumerateSource() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        using var cancellationSource = new CancellationTokenSource();
+        cancellationSource.Cancel();
+        var enumerated = false;
+        var factoryCalls = 0;
+        OperationCanceledException propagated = null;
+        IEnumerable<int> Source() {
+            enumerated = true;
+            yield return 1;
+        }
+        var operation = Start(@operator, "canceled batch", async (progress, _) => {
+            try {
+                await progress.Children(Source(), _ => {
+                    factoryCalls++;
+                    return new OperationChild("child", (_, _) => Task.CompletedTask);
+                }, OperationFailureBehavior.Record, cancellationSource.Token);
+            }
+            catch (OperationCanceledException ex) {
+                propagated = ex;
+            }
+        });
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(propagated, Is.Not.Null);
+            Assert.That(propagated.CancellationToken, Is.EqualTo(cancellationSource.Token));
+            Assert.That(enumerated, Is.False);
+            Assert.That(factoryCalls, Is.Zero);
+        }
+    });
+
+    /// <summary>
+    /// Verifies a factory-thrown cancellation with its canceled supplied token propagates that original exception.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_TokenBackedFactoryCancellationPropagatesOriginalException() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        using var cancellationSource = new CancellationTokenSource();
+        var cancellation = new OperationCanceledException("factory cancellation", cancellationSource.Token);
+        Exception propagated = null;
+        var factoryCalls = 0;
+        var operation = Start(@operator, "factory cancellation", async (progress, _) => {
+            try {
+                await progress.Children(new[] { 1 }, _ => {
+                    factoryCalls++;
+                    cancellationSource.Cancel();
+                    throw cancellation;
+                }, OperationFailureBehavior.Record, cancellationSource.Token);
+            }
+            catch (OperationCanceledException ex) {
+                propagated = ex;
+            }
+        });
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(factoryCalls, Is.EqualTo(1));
+            Assert.That(propagated, Is.SameAs(cancellation));
+            Assert.That(operation.Error, Is.Null);
+            Assert.That(operation.CompleteWithError, Is.False);
+        }
+    });
+
+    /// <summary>
+    /// Verifies a canceled batch stops future registrations and joins a started child that ignores cancellation.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_CancellationStopsSchedulingAndJoinsStartedChildren() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        using var suppliedCancellation = new CancellationTokenSource();
+        var childStarted = NewSignal();
+        var releaseChild = NewSignal();
+        var factoryCalls = 0;
+        Task<OperationBatchResult> batch = null;
+        var rootToken = default(CancellationToken);
+        OperationCanceledException propagated = null;
+        var operation = Start(@operator, "batch cancellation", async (progress, token) => {
+            rootToken = token;
+            try {
+                batch = progress.Children(new[] { 1, 2, 3 }, item => {
+                    factoryCalls++;
+                    if (item == 2) {
+                        suppliedCancellation.Cancel();
+                        return new OperationChild("not registered", (_, _) => Task.CompletedTask);
+                    }
+                    return new OperationChild("started child", async (_, _) => {
+                        childStarted.TrySetResult();
+                        await releaseChild.Task;
+                    });
+                }, OperationFailureBehavior.Record, suppliedCancellation.Token);
+                await batch;
+            }
+            catch (OperationCanceledException ex) {
+                propagated = ex;
+            }
+        });
+
+        try {
+            await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.That(factoryCalls, Is.EqualTo(2));
+            Assert.That(batch.IsCompleted, Is.False);
+            Assert.That(await WaitForChildren((OperationBase)operation), Has.Length.EqualTo(1));
+        }
+        finally {
+            releaseChild.TrySetResult();
+            try {
+                await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception) {
+            }
+        }
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(propagated, Is.Not.Null);
+            Assert.That(propagated.CancellationToken, Is.EqualTo(suppliedCancellation.Token));
+            Assert.That(rootToken.IsCancellationRequested, Is.False);
+            Assert.That(factoryCalls, Is.EqualTo(2));
+            Assert.That(operation.CompleteWithError, Is.False);
+        }
+    });
+
+    /// <summary>
+    /// Verifies a factory failure stays exceptional when it reuses a child work exception.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task Children_FactoryReusingWorkExceptionRemainsInfrastructure() => UiTestThread.Run(async () => {
+        var @operator = CreateOperator();
+        var sharedFailure = new IOException("shared work and factory exception");
+        Exception propagated = null;
+        var factoryCalls = 0;
+        var operation = Start(@operator, "construction exception", async (progress, _) => {
+            try {
+                await progress.Children(new[] { 1, 2 }, item => {
+                    factoryCalls++;
+                    if (item == 2) {
+                        throw sharedFailure;
+                    }
+                    return new OperationChild("failed work", (_, _) => ThrowSynchronously(sharedFailure));
+                }, OperationFailureBehavior.Record, default);
+            }
+            catch (Exception ex) {
+                propagated = ex;
+            }
+        });
+        await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(factoryCalls, Is.EqualTo(2));
+            Assert.That(propagated, Is.SameAs(sharedFailure));
+            Assert.That(operation.Error, Is.Null);
+            Assert.That(operation.CompleteWithError, Is.True);
+        }
+    });
 
     /// <summary>Verifies that requested cancellation cancels the delegate's token and completes without an error.</summary>
     /// <returns>A task representing execution of the test.</returns>
@@ -1066,7 +1481,11 @@ internal sealed class OperatorTests {
             operation.Cancel();
             Exception childError = null;
             try {
-                await savedProgress.Child("too late", (_, _) => Task.CompletedTask);
+                await savedProgress.Child(
+                    "too late",
+                    (_, _) => Task.CompletedTask,
+                    OperationFailureBehavior.Record,
+                    default);
             }
             catch (Exception exception) {
                 childError = exception;
@@ -1096,6 +1515,51 @@ internal sealed class OperatorTests {
                 Assert.That(operation.CompleteWithError, Is.True);
             }
             return Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Verifies a canceled exception token unknown to the operation tree is recorded as a root error.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task OperationCanceledExceptionWithUnknownCanceledToken_IsRecordedAsAnError() =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            using var exceptionSource = new CancellationTokenSource();
+            exceptionSource.Cancel();
+            var cancellation = new OperationCanceledException("canceled", exceptionSource.Token);
+            var operation = Start(@operator, "canceled exception token", (_, _) =>
+                Task.FromException(cancellation));
+
+            await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(operation.Error, Is.SameAs(cancellation));
+                Assert.That(operation.CompleteWithError, Is.True);
+                Assert.That(@operator.Operations.Count, Is.EqualTo(1));
+            }
+        });
+
+    /// <summary>
+    /// Verifies a root that times out on its own token source remains visible with an error.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task RootTimeout_IsRecordedAsAnError() =>
+        UiTestThread.Run(async () => {
+            var @operator = CreateOperator();
+            var operation = Start(@operator, "timeout", async (_, _) => {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(1));
+                await Task.Delay(Timeout.InfiniteTimeSpan, timeout.Token);
+            });
+
+            await ((OperationBase)operation).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+            using (Assert.EnterMultipleScope()) {
+                Assert.That(operation.Error, Is.InstanceOf<OperationCanceledException>());
+                Assert.That(operation.CompleteWithError, Is.True);
+                Assert.That(@operator.Operations.Count, Is.EqualTo(1));
+            }
         });
 
     /// <summary>Verifies that cancellation aggregates callback failures while still canceling the operation.</summary>
@@ -1148,7 +1612,7 @@ internal sealed class OperatorTests {
                     }
                     catch (OperationCanceledException) when (childToken.IsCancellationRequested) {
                     }
-                });
+                }, OperationFailureBehavior.Record, default);
             });
             var parentToken = await parentStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var childToken = await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1162,6 +1626,78 @@ internal sealed class OperatorTests {
                 Assert.That(operation.CompleteWithError, Is.False);
             }
         });
+
+    /// <summary>
+    /// Verifies a startup notification failure releases a cancellation lease acquired before notification drain.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public async Task OperationCancellation_StartupProgressListenerFailureReleasesTokenLease() {
+        var @operator = await Task.Run(CreateOperator);
+        var parentStarted = NewSignal();
+        var releaseParent = NewSignal();
+        var listenerFailure = new IOException("child startup progress listener");
+        IOperationProgress retainedProgress = null;
+        Operation root = null;
+        OperationBase child = null;
+        Exception boundaryFailure = null;
+        Exception rootFailure = null;
+        try {
+            await UiTestThread.Run(async () => {
+                root = Start(@operator, "root", async (progress, _) => {
+                    retainedProgress = progress;
+                    parentStarted.TrySetResult();
+                    await releaseParent.Task;
+                }, operation => ((INotifyCollectionChanged)operation.ChildSource).CollectionChanged += (_, args) => {
+                    if (args.NewItems?[0] is not OperationBase addedChild) {
+                        return;
+                    }
+                    addedChild.PropertyChanged += (_, change) => {
+                        if (change.PropertyName == nameof(OperationBase.Progressing) && addedChild.Progressing) {
+                            throw listenerFailure;
+                        }
+                    };
+                    operation.Cancel();
+                });
+                try {
+                    await parentStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    try {
+                        await retainedProgress.Child("child", (_, _) => {
+                            Assert.Fail("Canceled child delegate should not run.");
+                            return Task.CompletedTask;
+                        }, OperationFailureBehavior.Record, default);
+                    }
+                    catch (Exception ex) {
+                        boundaryFailure = ex;
+                    }
+                    child = (await WaitForChildren((OperationBase)root)).Single();
+                }
+                finally {
+                    releaseParent.TrySetResult();
+                    try {
+                        await ((OperationBase)root).Completion.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (Exception) {
+                    }
+                }
+            });
+        }
+        catch (Exception ex) {
+            rootFailure = ex;
+        }
+        finally {
+            releaseParent.TrySetResult();
+        }
+
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(boundaryFailure, Is.SameAs(listenerFailure));
+            Assert.That(rootFailure, Is.SameAs(listenerFailure));
+            Assert.That(child, Is.Not.Null);
+            Assert.That(child.Complete, Is.True);
+            Assert.That(GetPrivateField<int>(child, "TokenSourceCancellationCount"), Is.Zero);
+            Assert.That(GetPrivateField<bool>(child, "TokenSourceDisposalPending"), Is.False);
+        }
+    }
 
     /// <summary>
     /// Verifies that subtree cancellation releases each active operation's token source lease.
@@ -1191,13 +1727,13 @@ internal sealed class OperatorTests {
                         }
                         catch (OperationCanceledException) when (grandchildToken.IsCancellationRequested) {
                         }
-                    });
+                    }, OperationFailureBehavior.Record, default);
                     try {
                         await Task.Delay(Timeout.InfiniteTimeSpan, childToken);
                     }
                     catch (OperationCanceledException) when (childToken.IsCancellationRequested) {
                     }
-                });
+                }, OperationFailureBehavior.Record, default);
                 try {
                     await Task.Delay(Timeout.InfiniteTimeSpan, token);
                 }
@@ -1267,8 +1803,8 @@ internal sealed class OperatorTests {
                         });
                         grandchildStarted.TrySetResult(grandchildToken);
                         await releaseGrandchild.Task;
-                    });
-                });
+                    }, OperationFailureBehavior.Record, default);
+                }, OperationFailureBehavior.Record, default);
             });
             Task cancellation = null;
             try {
@@ -1291,7 +1827,7 @@ internal sealed class OperatorTests {
                     foreach (var item in operations) {
                         Assert.That(item.Complete, Is.True, item.Name);
                         Assert.That(GetPrivateField<int>(item, "TokenSourceCancellationCount"),
-                                    Is.EqualTo(1), item.Name);
+                                    Is.GreaterThan(0), item.Name);
                         Assert.That(GetPrivateField<bool>(item, "TokenSourceDisposalPending"), Is.True, item.Name);
                     }
                     Assert.That(tokenSources.All(tokenSource => !IsDisposed(tokenSource)), Is.True);

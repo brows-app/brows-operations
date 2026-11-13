@@ -6,7 +6,9 @@ using System.Windows;
 
 namespace Brows;
 
-/// <summary>Demonstrates hierarchical work, progress reporting, cancellation, and failures through the operation APIs.</summary>
+/// <summary>
+/// Demonstrates hierarchical work, progress reporting, cancellation, and failures through the operation APIs.
+/// </summary>
 sealed partial class OperationsSampleWindow : IExport {
     private const string ProgressRateFormat = "N2";
     private IOperator _operator;
@@ -107,15 +109,19 @@ sealed partial class OperationsSampleWindow : IExport {
                                       progressRateAverageFormat: ProgressRateFormat);
                 for (var file = 1; file <= 2; file++) {
                     var fileNumber = file;
-                    await folderProgress.Child($"File {fileNumber}", (fileProgress, fileToken) =>
-                        RunSteps(fileProgress,
-                                 fileToken,
-                                 name: $"Copy file {fileNumber}",
-                                 steps: 8,
-                                 delay: TimeSpan.FromMilliseconds(450),
-                                 action: "Copied"));
+                    await folderProgress.Child(
+                        $"File {fileNumber}",
+                        (fileProgress, fileToken) => RunSteps(
+                            fileProgress,
+                            fileToken,
+                            name: $"Copy file {fileNumber}",
+                            steps: 8,
+                            delay: TimeSpan.FromMilliseconds(450),
+                            action: "Copied"),
+                        OperationFailureBehavior.Throw,
+                        default);
                 }
-            });
+            }, OperationFailureBehavior.Throw, default);
         }
     }
 
@@ -123,16 +129,23 @@ sealed partial class OperationsSampleWindow : IExport {
         progress.Change(data: "Four child operations run concurrently",
                         progressRateFormat: ProgressRateFormat,
                         progressRateAverageFormat: ProgressRateFormat);
-        await progress.Children(
+        var result = await progress.Children(
             Enumerable.Range(1, 4),
-            item => new OperationChild(
-                $"Batch item {item}",
-                (childProgress, childToken) => RunSteps(childProgress,
-                                                        childToken,
-                                                        name: $"Process item {item}",
-                                                        steps: 10,
-                                                        delay: TimeSpan.FromMilliseconds(400 + item * 35),
-                                                        action: "Processed")));
+            item => new OperationChild($"Batch item {item}", async (childProgress, childToken) => {
+                await RunSteps(childProgress,
+                               childToken,
+                               name: $"Process item {item}",
+                               steps: 10,
+                               delay: TimeSpan.FromMilliseconds(400 + item * 35),
+                               action: "Processed");
+                if (item == 3) {
+                    throw new InvalidOperationException("This independent transfer failed on purpose.");
+                }
+            }),
+            OperationFailureBehavior.Record,
+            default);
+        progress.Change(data: $"{result.SucceededCount} succeeded, {result.FailedCount} failed, " +
+                               $"{result.CanceledCount} canceled");
     }
 
     private static async Task ProgressUpdates(IOperationProgress progress, CancellationToken token) {
@@ -202,7 +215,7 @@ sealed partial class OperationsSampleWindow : IExport {
         progress.Change(data: "The child error should remain visible in the hierarchy",
                         progressRateFormat: ProgressRateFormat,
                         progressRateAverageFormat: ProgressRateFormat);
-        await progress.Child("Failing child", async (childProgress, childToken) => {
+        var result = await progress.Child("Failing child", async (childProgress, childToken) => {
             await RunSteps(childProgress,
                            childToken,
                            name: "Work before failure",
@@ -210,7 +223,10 @@ sealed partial class OperationsSampleWindow : IExport {
                            delay: TimeSpan.FromMilliseconds(400),
                            action: "Completed");
             throw new InvalidOperationException("This child failed on purpose.");
-        });
+        }, OperationFailureBehavior.Record, default);
+        if (result.Kind == OperationResultKind.Failed) {
+            progress.Change(data: $"The child failure was recorded: {result.Error.Message}");
+        }
     }
 
     private static async Task ParentFailure(IOperationProgress progress, CancellationToken token) {
@@ -223,7 +239,7 @@ sealed partial class OperationsSampleWindow : IExport {
                      name: "Cleanup work",
                      steps: 9,
                      delay: TimeSpan.FromMilliseconds(450),
-                     action: "Finished"));
+                     action: "Finished"), OperationFailureBehavior.Record, default);
         await Task.Delay(500, token);
         throw new InvalidOperationException("The parent failed while its child was still running.");
     }

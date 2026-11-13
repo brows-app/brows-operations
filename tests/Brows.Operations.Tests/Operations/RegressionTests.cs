@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Brows.Operations;
@@ -82,7 +83,11 @@ internal sealed class RegressionTests {
         var release = Signal();
         var root = Start(@operator, async (progress, _) => {
             var registrations = await Task.WhenAll(Enumerable.Range(0, workerCount).Select(index =>
-                Task.Run(() => Tuple.Create(progress.Child($"child {index}", async (_, _) => await release.Task)))));
+                Task.Run(() => Tuple.Create(progress.Child(
+                    $"child {index}",
+                    async (_, _) => await release.Task,
+                    OperationFailureBehavior.Record,
+                    default)))));
             var children = registrations.Select(registration => registration.Item1).ToArray();
             registered.TrySetResult();
             await Task.WhenAll(children);
@@ -98,6 +103,11 @@ internal sealed class RegressionTests {
         }
         finally {
             release.TrySetResult();
+            try {
+                await root.Completion.WaitAsync(Timeout);
+            }
+            catch (Exception) {
+            }
         }
         await root.Completion.WaitAsync(Timeout);
 
@@ -109,7 +119,11 @@ internal sealed class RegressionTests {
     [Test]
     public Task SynchronousChildSuccess_RemovesTheCompletedRoot() => UiTestThread.Run(() => {
         IOperator @operator = new Operator();
-        Start(@operator, async (progress, _) => await progress.Child("child", (_, _) => Task.CompletedTask));
+        Start(@operator, async (progress, _) => await progress.Child(
+            "child",
+            (_, _) => Task.CompletedTask,
+            OperationFailureBehavior.Record,
+            default));
         Assert.That(@operator.Operations.Count, Is.Zero);
         return Task.CompletedTask;
     });
@@ -167,13 +181,22 @@ internal sealed class RegressionTests {
         var release = Signal();
         var root = Start(@operator, (progress, token) => {
             retained = progress;
-            _ = progress.Child("existing child", async (_, _) => await release.Task);
+            _ = progress.Child(
+                "existing child",
+                async (_, _) => await release.Task,
+                OperationFailureBehavior.Record,
+                default);
             return parentFails ? Task.FromException(new IOException("parent")) : Task.CompletedTask;
         });
         var childStarted = false;
         Exception registrationError = null;
         try {
-            try { await retained.Child("late child", (_, _) => { childStarted = true; return Task.CompletedTask; }); }
+            try {
+                await retained.Child("late child", (_, _) => {
+                    childStarted = true;
+                    return Task.CompletedTask;
+                }, OperationFailureBehavior.Record, default);
+            }
             catch (Exception ex) { registrationError = ex; }
         }
         finally { release.TrySetResult(); }
@@ -198,7 +221,7 @@ internal sealed class RegressionTests {
             _ = progress.Child("child", async (_, _) => {
                 await release.Task;
                 throw new IOException("late child failure");
-            });
+            }, OperationFailureBehavior.Record, default);
             try { await Task.Delay(System.Threading.Timeout.Infinite, token); }
             finally { delegateSettled.TrySetResult(); }
         });
@@ -233,31 +256,106 @@ internal sealed class RegressionTests {
     BatchConstructionFailure_JoinsChildrenAlreadyStarted(bool enumerationFails) => UiTestThread.Run(async () => {
         IOperator @operator = new Operator();
         var release = Signal();
+        var constructionFailure = new IOException(enumerationFails ? "enumeration failed" : "factory failed");
+        Exception propagated = null;
+        Task<OperationBatchResult> batch = null;
         var root = Start(@operator, async (progress, _) => {
-            await progress.Children(enumerationFails ? FailingSource() : new[] { 1, 2 }, item => {
-                if (item == 2) throw new IOException("factory failed");
-                return new OperationChild("started child", async (_, _) => await release.Task);
-            });
+            try {
+                batch = progress.Children(
+                    enumerationFails ? FailingSource(constructionFailure) : new[] { 1, 2 },
+                    item => {
+                        if (item == 2) throw constructionFailure;
+                        return new OperationChild("started child", async (_, _) => await release.Task);
+                    },
+                    OperationFailureBehavior.Record,
+                    default);
+                await batch;
+            }
+            catch (Exception ex) {
+                propagated = ex;
+            }
         });
-        var stateWhileJoining = (root.Complete, root.Progressing, HasError: root.Error is IOException);
-        release.SetResult();
+        var stateWhileJoining = (root.Complete, root.Progressing);
+        try {
+            Assert.That((await WaitForChildren(root)).Single().Complete, Is.False);
+            Assert.That(batch.IsCompleted, Is.False);
+            Assert.That(propagated, Is.Null);
+            Assert.That(root.Complete, Is.False);
+        }
+        finally {
+            release.TrySetResult();
+        }
         await root.Completion.WaitAsync(Timeout);
         using (Assert.EnterMultipleScope()) {
             Assert.That(stateWhileJoining.Complete, Is.False);
             Assert.That(stateWhileJoining.Progressing, Is.True);
-            Assert.That(stateWhileJoining.HasError, Is.True);
-            Assert.That(root.CompleteWithError, Is.True);
+            Assert.That(propagated, Is.SameAs(constructionFailure));
+            Assert.That(root.Error, Is.Null);
+            Assert.That(root.CompleteWithError, Is.False);
             Assert.That((await WaitForChildren(root)).Single().Complete, Is.True);
         }
     });
 
-    private static IEnumerable<int> FailingSource() {
+    private static IEnumerable<int> FailingSource(Exception failure) {
         yield return 1;
-        throw new IOException("enumeration failed");
+        throw failure;
     }
 
     /// <summary>
-    /// Verifies that awaiting failed child work reports completion without propagating its delegate error.
+    /// Verifies batch enumeration and disposal failures are both retained after joining started children.
+    /// </summary>
+    /// <returns>A task representing execution of the test.</returns>
+    [Test]
+    public Task BatchEnumeratorAndDisposeFailures_AggregateAfterJoiningStartedChild() => UiTestThread.Run(async () => {
+        IOperator @operator = new Operator();
+        var childStarted = Signal();
+        var releaseChild = Signal();
+        var moveFailure = new IOException("MoveNext failed");
+        var disposeFailure = new IOException("Dispose failed");
+        Exception propagated = null;
+        Task<OperationBatchResult> batch = null;
+        var root = Start(@operator, async (progress, _) => {
+            try {
+                batch = progress.Children(new EnumeratorWithMoveAndDisposeFailures(moveFailure, disposeFailure),
+                    _ => new OperationChild("started child", async (_, _) => {
+                        childStarted.TrySetResult();
+                        await releaseChild.Task;
+                    }), OperationFailureBehavior.Record, default);
+                await batch;
+            }
+            catch (Exception ex) {
+                propagated = ex;
+            }
+        });
+
+        try {
+            await childStarted.Task.WaitAsync(Timeout);
+            Assert.That(batch.IsCompleted, Is.False);
+        }
+        finally {
+            releaseChild.TrySetResult();
+            try {
+                await root.Completion.WaitAsync(Timeout);
+            }
+            catch (Exception) {
+            }
+        }
+        await root.Completion.WaitAsync(Timeout);
+
+        Assert.That(propagated, Is.InstanceOf<AggregateException>());
+        var aggregate = (AggregateException)propagated;
+        using (Assert.EnterMultipleScope()) {
+            Assert.That(aggregate.InnerExceptions, Has.Count.EqualTo(2));
+            Assert.That(aggregate.InnerExceptions[0], Is.SameAs(moveFailure));
+            Assert.That(aggregate.InnerExceptions[1], Is.SameAs(disposeFailure));
+            Assert.That((await WaitForChildren(root)).Single().Complete, Is.True);
+            Assert.That(root.Error, Is.Null);
+            Assert.That(root.CompleteWithError, Is.False);
+        }
+    });
+
+    /// <summary>
+    /// Verifies that Record returns failed child outcomes without propagating their delegate errors.
     /// </summary>
     /// <param name="batch">Whether to await a batch rather than a single child.</param>
     /// <returns>A task representing execution of the test.</returns>
@@ -266,16 +364,23 @@ internal sealed class RegressionTests {
     public Task AwaitingFailedChild_ReportsCompletionWithoutThrowing(bool batch) => UiTestThread.Run(() => {
         IOperator @operator = new Operator();
         var continued = false;
-        var batchResult = false;
+        OperationBatchResult batchResult = null;
         var root = Start(@operator, async (progress, _) => {
             OperationDelegate failure = (_, _) => Task.FromException(new IOException("child"));
-            if (batch) batchResult = await progress.Children(new[] { 1 }, _ => new OperationChild("child", failure));
-            else await progress.Child("child", failure);
+            if (batch) {
+                batchResult = await progress.Children(
+                    new[] { 1 },
+                    _ => new OperationChild("child", failure),
+                    OperationFailureBehavior.Record,
+                    default);
+            }
+            else await progress.Child("child", failure, OperationFailureBehavior.Record, default);
             continued = true;
         });
         using (Assert.EnterMultipleScope()) {
             Assert.That(continued, Is.True);
-            Assert.That(batchResult, Is.EqualTo(batch));
+            Assert.That(batchResult?.FailedCount ?? 0, Is.EqualTo(batch ? 1 : 0));
+            Assert.That(batchResult?.Results.Count ?? 0, Is.EqualTo(batch ? 1 : 0));
             Assert.That(root.CompleteWithError, Is.True);
         }
         return Task.CompletedTask;
@@ -296,8 +401,18 @@ internal sealed class RegressionTests {
             IOperator @operator = new Operator();
             var release = Signal();
             IOperationProgress leafProgress = null;
-            var root = Start(@operator, async (progress, _) => await progress.Child("middle", async (middle, _) =>
-                await middle.Child("leaf", async (leaf, _) => { leafProgress = leaf; await release.Task; })));
+            var root = Start(@operator, async (progress, _) => await progress.Child(
+                "middle",
+                async (middle, _) => await middle.Child(
+                    "leaf",
+                    async (leaf, _) => {
+                        leafProgress = leaf;
+                        await release.Task;
+                    },
+                    OperationFailureBehavior.Record,
+                    default),
+                OperationFailureBehavior.Record,
+                default));
             var middleOperation = (await WaitForChildren(root)).Single();
             var leafOperation = (await WaitForChildren(middleOperation)).Single();
             var first = true;
@@ -351,7 +466,7 @@ internal sealed class RegressionTests {
         var root = Start(@operator, async (progress, _) => await progress.Child("child", async (child, _) => {
             childProgress = child;
             await release.Task;
-        }));
+        }, OperationFailureBehavior.Record, default));
         var values = new List<(string Property, string Value)>();
         root.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(OperationBase.ProgressString))
@@ -388,11 +503,11 @@ internal sealed class RegressionTests {
                     calls[1]++; throw new IOException("callback");
                 });
                 await release.Task;
-            });
+            }, OperationFailureBehavior.Record, default);
             _ = progress.Child("sibling", async (_, childToken) => {
                 using var childRegistration = childToken.Register(() => calls[2]++);
                 await release.Task;
-            });
+            }, OperationFailureBehavior.Record, default);
             await release.Task;
         });
         AggregateException failure = null;
@@ -434,18 +549,33 @@ internal sealed class RegressionTests {
         IOperator @operator = new Operator();
         var release = Signal();
         IOperationProgress retained = null;
-        var root = Start(@operator, async (progress, _) => { retained = progress; await release.Task; });
+        var rootToken = default(CancellationToken);
+        var root = Start(@operator, async (progress, token) => {
+            retained = progress;
+            rootToken = token;
+            await release.Task;
+        });
         var source = (INotifyCollectionChanged)root.ChildSource;
         source.CollectionChanged += (_, _) => root.Cancel();
         var childRan = false;
-        await retained.Child("child", (_, token) => {
-            childRan = true;
-            return Task.Delay(System.Threading.Timeout.Infinite, token);
-        });
-        release.SetResult();
+        OperationCanceledException childCancellation = null;
+        try {
+            await retained.Child("child", (_, token) => {
+                childRan = true;
+                return Task.Delay(System.Threading.Timeout.Infinite, token);
+            }, OperationFailureBehavior.Record, default);
+        }
+        catch (OperationCanceledException ex) {
+            childCancellation = ex;
+        }
+        finally {
+            release.TrySetResult();
+        }
         await root.Completion.WaitAsync(Timeout);
         using (Assert.EnterMultipleScope()) {
             Assert.That(childRan, Is.True);
+            Assert.That(childCancellation, Is.Not.Null);
+            Assert.That(childCancellation.CancellationToken, Is.EqualTo(rootToken));
             var child = (await WaitForChildren(root)).Single();
             Assert.That(child.Complete, Is.True);
             Assert.That(root.CompleteWithError, Is.False);
@@ -460,15 +590,31 @@ internal sealed class RegressionTests {
         Assert.That(((OperationCollection)@operator.Operations).Synchronization.SynchronizationContext, Is.Null);
         var release = Signal();
         IOperationProgress retained = null;
-        var root = Start(@operator, async (progress, _) => { retained = progress; await release.Task; });
+        var rootToken = default(CancellationToken);
+        var root = Start(@operator, async (progress, token) => {
+            retained = progress;
+            rootToken = token;
+            await release.Task;
+        });
         ((INotifyCollectionChanged)root.ChildSource).CollectionChanged += (_, _) => root.Cancel();
         var childRan = false;
-        await retained.Child("child", (_, _) => { childRan = true; return Task.CompletedTask; });
-        release.SetResult();
+        OperationCanceledException registrationCancellation = null;
+        try {
+            await retained.Child("child", (_, _) => { childRan = true; return Task.CompletedTask; },
+                OperationFailureBehavior.Record, default);
+        }
+        catch (OperationCanceledException ex) {
+            registrationCancellation = ex;
+        }
+        finally {
+            release.TrySetResult();
+        }
         await root.Completion.WaitAsync(Timeout);
 
         using (Assert.EnterMultipleScope()) {
             Assert.That(childRan, Is.False);
+            Assert.That(registrationCancellation, Is.Not.Null);
+            Assert.That(registrationCancellation.CancellationToken, Is.EqualTo(rootToken));
             Assert.That(((IList)root.ChildSource).Count, Is.EqualTo(1));
             Assert.That(root.CompleteWithError, Is.False);
         }
@@ -514,8 +660,18 @@ internal sealed class RegressionTests {
         IOperator @operator = new Operator();
         var release = Signal();
         var relevant = Signal();
-        var root = Start(@operator, async (progress, _) => await progress.Child("middle", async (middle, _) =>
-            await middle.Child("leaf", async (leaf, _) => { leaf.Change(setTarget: 1); await release.Task; })));
+        var root = Start(@operator, async (progress, _) => await progress.Child(
+            "middle",
+            async (middle, _) => await middle.Child(
+                "leaf",
+                async (leaf, _) => {
+                    leaf.Change(setTarget: 1);
+                    await release.Task;
+                },
+                OperationFailureBehavior.Record,
+                default),
+            OperationFailureBehavior.Record,
+            default));
         root.RelevantChanged += (_, _) => { if (root.Relevant) relevant.TrySetResult(); };
         (bool Root, bool Middle, bool Leaf, bool Collection) state;
         try {
@@ -582,7 +738,10 @@ internal sealed class RegressionTests {
         Task registration = null;
         root.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(OperationBase.Canceling)) {
-                registration = retained.Child("late child", (_, _) => { childRan = true; return Task.CompletedTask; });
+                registration = retained.Child("late child", (_, _) => {
+                    childRan = true;
+                    return Task.CompletedTask;
+                }, OperationFailureBehavior.Record, default);
             }
         };
         root.Cancel();
@@ -612,11 +771,11 @@ internal sealed class RegressionTests {
                     throw new IOException("child token");
                 });
                 await release.Task;
-            });
+            }, OperationFailureBehavior.Record, default);
             _ = progress.Child("sibling", async (_, childToken) => {
                 using var childRegistration = childToken.Register(() => calls[2]++);
                 await release.Task;
-            });
+            }, OperationFailureBehavior.Record, default);
             await release.Task;
         });
         PropertyChangedEventHandler parentHandler = (_, e) => {

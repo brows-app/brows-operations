@@ -72,6 +72,9 @@ run on the updating thread.
 | `OperationProgressRateAverageContentTemplate` | Formatted average progress-rate string, such as `1.23 MiB`. |
 | `OperationTargetContentTemplate` | Target display string. |
 | `OperationErrorTemplate` | The exception itself; bind to `Message`. |
+| `OperationDisplay` | `Default` columns, or `Responsive` layout that adapts to the available width. |
+| `OperationInlineHeaderTemplate` | Header text beside each value shown beneath an operation in `Responsive` mode. |
+| `OperationInline*ContentTemplate` | The column content strings, shown beneath an operation. |
 | `OperationProgressBarStyle` | Progress bar appearance and control template. |
 | `OperationScrollViewerStyle` | The outer scroll viewer's appearance and scrolling settings. |
 | `OperationCancelButtonStyle` | The running root's Cancel button style, including its content. |
@@ -83,4 +86,4 @@ The progress bar template retains WPF's `PART_Track` and `PART_Indicator` elemen
 
 Cancel and Remove use separate styles assigned through `OperationCancelButtonStyle` and `OperationRemoveButtonStyle`. Both target `Button` and share `OperationButtonStyle` for sizing. Remove uses the error palette. The custom styles explicitly set `Content` to supply their labels; the package owns their commands. Leaving either property unset or setting it to null uses the package's corresponding default button style and label.
 
-The package currently fixes column widths and ordering. The sample accommodates these with bounded cell text, tooltips, and horizontal scrolling. A column sizing API would allow a more responsive layout. Template properties for the progress/error and command headers would make those areas easier to customize directly.
+The package currently fixes column widths and ordering. The sample accommodates these with bounded cell text and tooltips, and sets `OperationDisplay` to `Responsive`. Narrow the window to see the progress bar collapse, then the rates, then progress and target, and finally the data move beneath each operation name. Those values use `OperationInlineHeaderTemplate` and the `OperationInline*ContentTemplate` properties instead of the fixed-width cell templates. Template properties for the progress/error and command headers would make those areas easier to customize directly.

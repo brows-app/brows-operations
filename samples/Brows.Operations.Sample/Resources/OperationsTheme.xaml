@@ -141,6 +141,19 @@
                FontSize="12" Foreground="{StaticResource MutedBrush}" TextAlignment="Center"
                TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
   </DataTemplate>
+  <!-- Inline templates display values beneath an operation when the responsive display lacks room for columns. -->
+  <DataTemplate x:Key="InlineHeaderTemplate">
+    <TextBlock Text="{Binding}" Margin="12,3,12,3" FontSize="11" FontWeight="SemiBold"
+               Foreground="{StaticResource MutedBrush}"/>
+  </DataTemplate>
+  <DataTemplate x:Key="InlineValueTemplate">
+    <TextBlock Text="{Binding}" Margin="0,3,12,3" FontSize="12" TextWrapping="Wrap"
+               Foreground="{StaticResource InkBrush}"/>
+  </DataTemplate>
+  <DataTemplate x:Key="InlineRateTemplate">
+    <TextBlock Text="{Binding}" Margin="0,3,12,3" FontSize="11" TextWrapping="Wrap"
+               Foreground="{StaticResource AccentBrush}"/>
+  </DataTemplate>
   <!-- Error templates receive the exception itself. -->
   <DataTemplate x:Key="ExceptionTemplate">
     <Border Background="{StaticResource ErrorSoftBrush}" CornerRadius="6" Padding="10,8"
@@ -284,5 +297,12 @@
     <Setter Property="OperationProgressRateAverageContentTemplate"
             Value="{StaticResource ProgressRateCellTemplate}"/>
     <Setter Property="OperationTargetContentTemplate" Value="{StaticResource TargetCellTemplate}"/>
+    <Setter Property="OperationDisplay" Value="Responsive"/>
+    <Setter Property="OperationInlineHeaderTemplate" Value="{StaticResource InlineHeaderTemplate}"/>
+    <Setter Property="OperationInlineDataContentTemplate" Value="{StaticResource InlineValueTemplate}"/>
+    <Setter Property="OperationInlineProgressContentTemplate" Value="{StaticResource InlineValueTemplate}"/>
+    <Setter Property="OperationInlineProgressRateContentTemplate" Value="{StaticResource InlineRateTemplate}"/>
+    <Setter Property="OperationInlineProgressRateAverageContentTemplate" Value="{StaticResource InlineRateTemplate}"/>
+    <Setter Property="OperationInlineTargetContentTemplate" Value="{StaticResource InlineValueTemplate}"/>
   </Style>
 </ResourceDictionary>

@@ -196,20 +196,18 @@ keep tests and shared test shims compatible with all applicable target framework
 ## Code reviews
 
 When asked to review code, inspect the entire requested scope thoroughly and
-identify all bugs and issues you can find. Write the findings to `Review.md` in
-the repository root. Number each issue so it can be referenced later. For every
-issue, describe the problem and a way to resolve it. Cite specific file names
-and line numbers where applicable. Review existing findings in `Review.md` before
-editing it so relevant issues are retained or updated without duplication.
-Keep review issue numbers stable: never renumber existing issues or reuse their
-numbers, including those marked resolved. Assign each new issue a number greater
-than the highest issue number already used in `Review.md`.
+identify all bugs and issues you can find. Write each new review to a dated file
+under `agents/reviews/`. Number issues from #1 in each new file. For every issue,
+describe the problem and a way to resolve it, citing specific file names and line
+numbers where applicable. When updating a report, preserve its existing findings
+and issue numbers, including resolved issues. Assign new issues numbers greater
+than the highest number already used in that report.
 
-When asked to fix issues from `Review.md`, work only on the issue numbers
-specified in the request. Prefer red/green testing: first add a test that fails
-because of each issue, then fix the code, then rerun the previously failing test
-to confirm it passes. Once an issue is resolved, keep it in `Review.md` and mark
-it as resolved in that issue's heading; do not remove it.
+When asked to fix issues from a review, work only on the issue numbers specified
+in the request. Prefer red/green testing by first adding a test that fails because
+of each issue, then fixing the code and rerunning the previously failing test to
+confirm it passes. Keep each resolved issue in its review report and mark it as
+resolved in the issue heading.
 
 If worktrees are explicitly requested for fixing multiple issues, create a
 separate Git worktree for each requested issue number. Place each worktree
@@ -218,8 +216,8 @@ as a sibling of that repository. Name it
 `agent-{original-directory-name}-{issue-number}`, where
 `original-directory-name` is the name of the original repository's root directory.
 Name each worktree branch
-`agent/{issue-number}/{short-description}`. Fix, test, and update `Review.md`
-for that issue in its own worktree. Commit each issue's changes on
+`agent/{issue-number}/{short-description}`. Fix, test, and update the source
+review report for that issue in its own worktree. Commit each issue's changes on
 its worktree branch. The first line of the commit message must start with
 `Fix #{issue-number}.`, followed by a blank line and a description of what was
 broken and how it was fixed. Once the commit is ready, notify the requester

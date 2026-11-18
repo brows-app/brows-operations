@@ -3,7 +3,7 @@
         xmlns:brows="http://schemas.brows.app/winfx/2026/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Brows Operations · Work in motion"
-        Height="900" Width="1440" MinHeight="760" MinWidth="1200"
+        Height="900" Width="1440" MinHeight="760" MinWidth="720"
         WindowStartupLocation="CenterScreen" FontFamily="Segoe UI"
         Background="{DynamicResource CanvasBrush}" Foreground="{DynamicResource InkBrush}"
         UseLayoutRounding="True" Loaded="Window_Loaded">
@@ -59,7 +59,8 @@
         <StackPanel>
           <TextBlock Text="01  /  HIERARCHY" FontSize="10" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
           <TextBlock Text="Explore a hierarchy" FontSize="16" FontWeight="SemiBold" Margin="0,7,0,4"/>
-          <TextBlock Text="Parents, children, and batches." FontSize="12" Foreground="{StaticResource MutedBrush}"/>
+          <TextBlock Text="Parents, children, and batches." FontSize="12" Foreground="{StaticResource MutedBrush}"
+                     TextWrapping="Wrap"/>
           <WrapPanel>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Nested workflow" Click="RunNested_Click"/>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Parallel batch" Click="RunBatch_Click"/>
@@ -71,7 +72,7 @@
           <TextBlock Text="02  /  PROGRESS" FontSize="10" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
           <TextBlock Text="Follow the progress" FontSize="16" FontWeight="SemiBold" Margin="0,7,0,4"/>
           <TextBlock Text="Rates update each second; the file-size run pauses to show idle rates."
-                     FontSize="12" Foreground="{StaticResource MutedBrush}"/>
+                     FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"/>
           <WrapPanel>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Set &amp; add" Click="RunProgressUpdates_Click"/>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="File sizes" Click="RunFileSizes_Click"/>
@@ -84,7 +85,8 @@
         <StackPanel>
           <TextBlock Text="03  /  ERRORS" FontSize="10" FontWeight="Bold" Foreground="{StaticResource ErrorBrush}"/>
           <TextBlock Text="Handle failures" FontSize="16" FontWeight="SemiBold" Margin="0,7,0,4"/>
-          <TextBlock Text="Errors stay available for inspection." FontSize="12" Foreground="{StaticResource MutedBrush}"/>
+          <TextBlock Text="Errors stay available for inspection." FontSize="12" Foreground="{StaticResource MutedBrush}"
+                     TextWrapping="Wrap"/>
           <WrapPanel>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Child fails" Click="RunChildFailure_Click"/>
             <Button Style="{StaticResource ScenarioButtonStyle}" Content="Parent fails" Click="RunParentFailure_Click"/>

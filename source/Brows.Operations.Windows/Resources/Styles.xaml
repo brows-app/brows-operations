@@ -33,6 +33,173 @@
           <TextBlock Text="{Binding Message}"/>
         </DataTemplate>
 
+        <!-- Responsive display: values shown beneath the operation. -->
+        <Style x:Key="_OperationInlineProgressRateFieldStyle" TargetType="Grid">
+          <Setter Property="Visibility" Value="Collapsed"/>
+          <Style.Triggers>
+            <DataTrigger Value="True"
+                         Binding="{Binding AreProgressRatesInline,
+                                           RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}">
+              <Setter Property="Visibility" Value="Visible"/>
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+        <Style x:Key="_OperationInlineProgressFieldStyle" TargetType="Grid">
+          <Setter Property="Visibility" Value="Collapsed"/>
+          <Style.Triggers>
+            <DataTrigger Value="True"
+                         Binding="{Binding IsProgressInline,
+                                           RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}">
+              <Setter Property="Visibility" Value="Visible"/>
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+        <Style x:Key="_OperationInlineDataFieldStyle" TargetType="Grid">
+          <Setter Property="Visibility" Value="Collapsed"/>
+          <Style.Triggers>
+            <DataTrigger Value="True"
+                         Binding="{Binding IsDataInline,
+                                           RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}">
+              <Setter Property="Visibility" Value="Visible"/>
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+        <DataTemplate x:Key="_OperationInlineHeaderTemplateDefault">
+          <TextBlock Text="{Binding}" Margin="0,0,8,0"/>
+        </DataTemplate>
+        <DataTemplate x:Key="_OperationInlineContentTemplateDefault">
+          <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+        </DataTemplate>
+        <DataTemplate x:Key="_OperationInlineErrorTemplateDefault">
+          <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+        </DataTemplate>
+        <ControlTemplate x:Key="_OperationInlineTemplate" TargetType="Control">
+          <!-- Limits the values to the viewport less this row's own horizontal inset. -->
+          <bwc:OperationInlinePanel ViewportWidth="{Binding InlineViewportWidth,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl}}">
+            <Grid HorizontalAlignment="Left">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition SharedSizeGroup="Depth"/>
+                <ColumnDefinition/>
+              </Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="1">
+                <Grid Style="{StaticResource _OperationInlineDataFieldStyle}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="InlineHeader"/>
+                    <ColumnDefinition/>
+                  </Grid.ColumnDefinitions>
+                  <ContentControl Content="Data"
+                                  ContentTemplate="{Binding OperationInlineHeaderTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineHeaderTemplateDefault}}"/>
+                  <ContentControl Grid.Column="1"
+                                  Content="{Binding Data}"
+                                  ContentTemplate="{Binding OperationInlineDataContentTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineContentTemplateDefault}}"/>
+                </Grid>
+                <Grid Style="{StaticResource _OperationInlineProgressFieldStyle}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="InlineHeader"/>
+                    <ColumnDefinition/>
+                  </Grid.ColumnDefinitions>
+                  <ContentControl Content="Progress"
+                                  ContentTemplate="{Binding OperationInlineHeaderTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineHeaderTemplateDefault}}"/>
+                  <ContentControl Grid.Column="1"
+                                  Content="{Binding ProgressString}"
+                                  ContentTemplate="{Binding OperationInlineProgressContentTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineContentTemplateDefault}}"/>
+                </Grid>
+                <Grid Style="{StaticResource _OperationInlineProgressRateFieldStyle}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="InlineHeader"/>
+                    <ColumnDefinition/>
+                  </Grid.ColumnDefinitions>
+                  <ContentControl Content="Rate"
+                                  ContentTemplate="{Binding OperationInlineHeaderTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineHeaderTemplateDefault}}"/>
+                  <ContentControl Grid.Column="1"
+                                  Content="{Binding ProgressRateString}"
+                                  ContentTemplate="{Binding OperationInlineProgressRateContentTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineContentTemplateDefault}}"/>
+                </Grid>
+                <Grid Style="{StaticResource _OperationInlineProgressRateFieldStyle}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="InlineHeader"/>
+                    <ColumnDefinition/>
+                  </Grid.ColumnDefinitions>
+                  <ContentControl Content="Average"
+                                  ContentTemplate="{Binding OperationInlineHeaderTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineHeaderTemplateDefault}}"/>
+                  <ContentControl Grid.Column="1"
+                                  Content="{Binding ProgressRateAverageString}"
+                                  ContentTemplate="{Binding OperationInlineProgressRateAverageContentTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineContentTemplateDefault}}"/>
+                </Grid>
+                <Grid Style="{StaticResource _OperationInlineProgressFieldStyle}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" SharedSizeGroup="InlineHeader"/>
+                    <ColumnDefinition/>
+                  </Grid.ColumnDefinitions>
+                  <ContentControl Content="Target"
+                                  ContentTemplate="{Binding OperationInlineHeaderTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineHeaderTemplateDefault}}"/>
+                  <ContentControl Grid.Column="1"
+                                  Content="{Binding TargetString}"
+                                  ContentTemplate="{Binding OperationInlineTargetContentTemplate,
+                                                            RelativeSource={RelativeSource
+                                                              AncestorType=bwc:OperatorControl},
+                                                            TargetNullValue={StaticResource
+                                                              _OperationInlineContentTemplateDefault}}"/>
+                </Grid>
+                <ContentControl Content="{Binding Error}"
+                                ContentTemplate="{Binding OperationErrorTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationInlineErrorTemplateDefault}}">
+                  <ContentControl.Style>
+                    <Style TargetType="ContentControl">
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
+                          <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </ContentControl.Style>
+                </ContentControl>
+              </StackPanel>
+            </Grid>
+          </bwc:OperationInlinePanel>
+        </ControlTemplate>
+
         <DataTemplate DataType="{x:Type b.o:OperationBase}">
           <Grid>
             <Grid.Style>
@@ -47,200 +214,282 @@
             </Grid.Style>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
               <RowDefinition/>
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0">
-              <Grid.Resources>
-                <DataTemplate x:Key="_OperationDepthContentTemplateDefault">
-                  <TextBlock Text="{Binding}" TextAlignment="Right"/>
-                </DataTemplate>
-                <DataTemplate x:Key="_OperationNameContentTemplateDefault">
-                  <TextBlock Text="{Binding}"/>
-                </DataTemplate>
-                <DataTemplate x:Key="_OperationDataContentTemplateDefault">
-                  <TextBlock Text="{Binding}"/>
-                </DataTemplate>
-                <DataTemplate x:Key="_OperationProgressContentTemplateDefault">
-                  <TextBlock Text="{Binding}"/>
-                </DataTemplate>
-                <DataTemplate x:Key="_OperationProgressRateContentTemplateDefault">
-                  <TextBlock Text="{Binding}"/>
-                </DataTemplate>
-                <DataTemplate x:Key="_OperationProgressRateAverageContentTemplateDefault">
-                  <TextBlock Text="{Binding}"/>
-                </DataTemplate>
-                <DataTemplate x:Key="_OperationTargetContentTemplateDefault">
-                  <TextBlock Text="{Binding}"/>
-                </DataTemplate>
-              </Grid.Resources>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition SharedSizeGroup="Depth"/>
-                <ColumnDefinition SharedSizeGroup="Name"/>
-                <ColumnDefinition SharedSizeGroup="Data"/>
-                <ColumnDefinition SharedSizeGroup="Progress"/>
-                <ColumnDefinition SharedSizeGroup="ProgressRate"/>
-                <ColumnDefinition SharedSizeGroup="ProgressRateAverage"/>
-                <ColumnDefinition SharedSizeGroup="Target"/>
-                <ColumnDefinition/>
-                <ColumnDefinition SharedSizeGroup="Command"/>
-              </Grid.ColumnDefinitions>
-              <ContentControl Grid.Column="0"
-                              Content="{Binding DepthString}"
-                              ContentTemplate="{Binding OperationDepthContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationDepthContentTemplateDefault}}"/>
-              <ContentControl Grid.Column="1"
-                              Content="{Binding Name}"
-                              ContentTemplate="{Binding OperationNameContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationNameContentTemplateDefault}}"/>
-              <ContentControl Grid.Column="2"
-                              Content="{Binding Data}"
-                              ContentTemplate="{Binding OperationDataContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationDataContentTemplateDefault}}"/>
-              <ContentControl Grid.Column="3"
-                              Content="{Binding ProgressString}"
-                              ContentTemplate="{Binding OperationProgressContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationProgressContentTemplateDefault}}"/>
-              <ContentControl Grid.Column="4"
-                              Content="{Binding ProgressRateString}"
-                              ContentTemplate="{Binding OperationProgressRateContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationProgressRateContentTemplateDefault}}"/>
-              <ContentControl Grid.Column="5"
-                              Content="{Binding ProgressRateAverageString}"
-                              ContentTemplate="{Binding OperationProgressRateAverageContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationProgressRateAverageContentTemplateDefault}}"/>
-              <ContentControl Grid.Column="6"
-                              Content="{Binding TargetString}"
-                              ContentTemplate="{Binding OperationTargetContentTemplate,
-                                                        RelativeSource={RelativeSource
-                                                          AncestorType=bwc:OperatorControl},
-                                                        TargetNullValue={StaticResource
-                                                          _OperationTargetContentTemplateDefault}}"/>
-              <Control Grid.Column="7">
-                <Control.Style>
-                  <Style TargetType="Control">
-                    <Setter Property="Visibility" Value="Collapsed"/>
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
-                        <Setter Property="Visibility" Value="Visible"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </Control.Style>
-                <Control.Template>
-                  <ControlTemplate>
-                    <ProgressBar Maximum="100" 
-                                 Value="{Binding ProgressPercent, Mode=OneWay}"
-                                 Style="{Binding OperationProgressBarStyle,
-                                                 RelativeSource={RelativeSource
-                                                    AncestorType=bwc:OperatorControl}}">
-                    </ProgressBar>
-                  </ControlTemplate>
-                </Control.Template>
-              </Control>
-
-              <Control Grid.Column="7">
-                <Control.Style>
-                  <Style TargetType="Control">
-                    <Setter Property="Visibility" Value="Visible"/>
-                    <Style.Triggers>
-                      <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
-                        <Setter Property="Visibility" Value="Collapsed"/>
-                      </DataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </Control.Style>
-                <Control.Template>
-                  <ControlTemplate>
-                    <ContentPresenter Content="{Binding Error}"
-                                      ContentTemplate="{Binding
-                                        Path=OperationErrorTemplate,
-                                        RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
-                                        TargetNullValue={StaticResource _OperationErrorTemplateDefault}}"/>
-                  </ControlTemplate>
-                </Control.Template>
-              </Control>
-
-              <ContentControl Grid.Column="8">
-                <ContentControl.Resources>
-                  <Style TargetType="Button" x:Key="_OperationCancelButtonStyleDefault">
-                    <Setter Property="Content" Value="Cancel"/>
-                  </Style>
-                  <Style TargetType="Button" x:Key="_OperationRemoveButtonStyleDefault">
-                    <Setter Property="Content" Value="Remove"/>
-                  </Style>
-                  <DataTemplate x:Key="_OperationCancelButtonTemplate">
-                    <Button Command="{Binding Converter={StaticResource _OperationCommandConverter},
-                                              ConverterParameter=Cancel}"
-                            Style="{Binding OperationCancelButtonStyle,
-                                            RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
-                                            TargetNullValue={StaticResource _OperationCancelButtonStyleDefault}}"/>
+            <!--
+              Responsive display: limits each root row to the viewport less its own inset, so that deeper
+              operations widening the scroll extent do not move the root's commands out of view.
+            -->
+            <bwc:OperationInlinePanel Grid.Row="0">
+              <bwc:OperationInlinePanel.Style>
+                <Style TargetType="bwc:OperationInlinePanel">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Parent}" Value="{x:Null}">
+                      <Setter Property="ViewportWidth"
+                              Value="{Binding RowViewportWidth,
+                                              RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </bwc:OperationInlinePanel.Style>
+              <Grid x:Name="_OperationRowGrid">
+                <Grid.Resources>
+                  <DataTemplate x:Key="_OperationDepthContentTemplateDefault">
+                    <TextBlock Text="{Binding}" TextAlignment="Right"/>
                   </DataTemplate>
-                  <DataTemplate x:Key="_OperationRemoveButtonTemplate">
-                    <Button Command="{Binding Converter={StaticResource _OperationCommandConverter},
-                                              ConverterParameter=Remove}"
-                            Style="{Binding OperationRemoveButtonStyle,
-                                            RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
-                                            TargetNullValue={StaticResource _OperationRemoveButtonStyleDefault}}"/>
+                  <DataTemplate x:Key="_OperationNameContentTemplateDefault">
+                    <TextBlock Text="{Binding}"/>
                   </DataTemplate>
-                </ContentControl.Resources>
-                <ContentControl.Style>
-                  <Style TargetType="ContentControl">
-                    <Setter Property="Content" Value="{x:Null}"/>
-                    <Style.Triggers>
-                      <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                          <Condition Binding="{Binding Parent}" Value="{x:Null}"/>
-                          <Condition Binding="{Binding Progressing}" Value="True"/>
-                        </MultiDataTrigger.Conditions>
-                        <Setter Property="Content" Value="{Binding}"/>
-                        <Setter Property="ContentTemplate" Value="{StaticResource _OperationCancelButtonTemplate}"/>
-                      </MultiDataTrigger>
-                      <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                          <Condition Binding="{Binding Parent}" Value="{x:Null}"/>
-                          <Condition Binding="{Binding Progressing}" Value="False"/>
-                        </MultiDataTrigger.Conditions>
-                        <Setter Property="Content" Value="{Binding}"/>
-                        <Setter Property="ContentTemplate" Value="{StaticResource _OperationRemoveButtonTemplate}"/>
-                      </MultiDataTrigger>
-                    </Style.Triggers>
-                  </Style>
-                </ContentControl.Style>
-              </ContentControl>
-            </Grid>
+                  <DataTemplate x:Key="_OperationDataContentTemplateDefault">
+                    <TextBlock Text="{Binding}"/>
+                  </DataTemplate>
+                  <DataTemplate x:Key="_OperationProgressContentTemplateDefault">
+                    <TextBlock Text="{Binding}"/>
+                  </DataTemplate>
+                  <DataTemplate x:Key="_OperationProgressRateContentTemplateDefault">
+                    <TextBlock Text="{Binding}"/>
+                  </DataTemplate>
+                  <DataTemplate x:Key="_OperationProgressRateAverageContentTemplateDefault">
+                    <TextBlock Text="{Binding}"/>
+                  </DataTemplate>
+                  <DataTemplate x:Key="_OperationTargetContentTemplateDefault">
+                    <TextBlock Text="{Binding}"/>
+                  </DataTemplate>
+                </Grid.Resources>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition SharedSizeGroup="Depth"/>
+                  <ColumnDefinition SharedSizeGroup="Name"/>
+                  <ColumnDefinition SharedSizeGroup="Data"/>
+                  <ColumnDefinition SharedSizeGroup="Progress"/>
+                  <ColumnDefinition SharedSizeGroup="ProgressRate"/>
+                  <ColumnDefinition SharedSizeGroup="ProgressRateAverage"/>
+                  <ColumnDefinition SharedSizeGroup="Target"/>
+                  <ColumnDefinition/>
+                  <ColumnDefinition SharedSizeGroup="Command"/>
+                </Grid.ColumnDefinitions>
+                <ContentControl Grid.Column="0"
+                                Content="{Binding DepthString}"
+                                ContentTemplate="{Binding OperationDepthContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationDepthContentTemplateDefault}}"/>
+                <ContentControl Grid.Column="1"
+                                Content="{Binding Name}"
+                                ContentTemplate="{Binding OperationNameContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationNameContentTemplateDefault}}"/>
+                <ContentControl Grid.Column="2"
+                                x:Name="_OperationDataCell"
+                                Content="{Binding Data}"
+                                ContentTemplate="{Binding OperationDataContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationDataContentTemplateDefault}}"/>
+                <ContentControl Grid.Column="3"
+                                x:Name="_OperationProgressCell"
+                                Content="{Binding ProgressString}"
+                                ContentTemplate="{Binding OperationProgressContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationProgressContentTemplateDefault}}"/>
+                <ContentControl Grid.Column="4"
+                                x:Name="_OperationProgressRateCell"
+                                Content="{Binding ProgressRateString}"
+                                ContentTemplate="{Binding OperationProgressRateContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationProgressRateContentTemplateDefault}}"/>
+                <ContentControl Grid.Column="5"
+                                x:Name="_OperationProgressRateAverageCell"
+                                Content="{Binding ProgressRateAverageString}"
+                                ContentTemplate="{Binding OperationProgressRateAverageContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationProgressRateAverageContentTemplateDefault}}"/>
+                <ContentControl Grid.Column="6"
+                                x:Name="_OperationTargetCell"
+                                Content="{Binding TargetString}"
+                                ContentTemplate="{Binding OperationTargetContentTemplate,
+                                                          RelativeSource={RelativeSource
+                                                            AncestorType=bwc:OperatorControl},
+                                                          TargetNullValue={StaticResource
+                                                            _OperationTargetContentTemplateDefault}}"/>
+                <Control Grid.Column="7">
+                  <Control.Style>
+                    <Style TargetType="Control">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
+                          <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                        <DataTrigger Value="True"
+                                     Binding="{Binding IsProgressBarCollapsed,
+                                                       RelativeSource={RelativeSource
+                                                         AncestorType=bwc:OperatorControl}}">
+                          <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Control.Style>
+                  <Control.Template>
+                    <ControlTemplate>
+                      <ProgressBar Maximum="100"
+                                   Value="{Binding ProgressPercent, Mode=OneWay}"
+                                   Style="{Binding OperationProgressBarStyle,
+                                                   RelativeSource={RelativeSource
+                                                      AncestorType=bwc:OperatorControl}}">
+                      </ProgressBar>
+                    </ControlTemplate>
+                  </Control.Template>
+                </Control>
 
-            <ContentPresenter Grid.Row="1"
+                <Control Grid.Column="7">
+                  <Control.Style>
+                    <Style TargetType="Control">
+                      <Setter Property="Visibility" Value="Visible"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Error}" Value="{x:Null}">
+                          <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                        <!-- Responsive display shows errors beneath the operation so they can wrap. -->
+                        <DataTrigger Value="Responsive"
+                                     Binding="{Binding OperationDisplay,
+                                                       RelativeSource={RelativeSource
+                                                         AncestorType=bwc:OperatorControl}}">
+                          <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </Control.Style>
+                  <Control.Template>
+                    <ControlTemplate>
+                      <ContentPresenter Content="{Binding Error}"
+                                        ContentTemplate="{Binding
+                                          Path=OperationErrorTemplate,
+                                          RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
+                                          TargetNullValue={StaticResource _OperationErrorTemplateDefault}}"/>
+                    </ControlTemplate>
+                  </Control.Template>
+                </Control>
+
+                <ContentControl Grid.Column="8">
+                  <ContentControl.Resources>
+                    <Style TargetType="Button" x:Key="_OperationCancelButtonStyleDefault">
+                      <Setter Property="Content" Value="Cancel"/>
+                    </Style>
+                    <Style TargetType="Button" x:Key="_OperationRemoveButtonStyleDefault">
+                      <Setter Property="Content" Value="Remove"/>
+                    </Style>
+                    <DataTemplate x:Key="_OperationCancelButtonTemplate">
+                      <Button Command="{Binding Converter={StaticResource _OperationCommandConverter},
+                                                ConverterParameter=Cancel}"
+                              Style="{Binding OperationCancelButtonStyle,
+                                              RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
+                                              TargetNullValue={StaticResource _OperationCancelButtonStyleDefault}}"/>
+                    </DataTemplate>
+                    <DataTemplate x:Key="_OperationRemoveButtonTemplate">
+                      <Button Command="{Binding Converter={StaticResource _OperationCommandConverter},
+                                                ConverterParameter=Remove}"
+                              Style="{Binding OperationRemoveButtonStyle,
+                                              RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
+                                              TargetNullValue={StaticResource _OperationRemoveButtonStyleDefault}}"/>
+                    </DataTemplate>
+                  </ContentControl.Resources>
+                  <ContentControl.Style>
+                    <Style TargetType="ContentControl">
+                      <Setter Property="Content" Value="{x:Null}"/>
+                      <Style.Triggers>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding Parent}" Value="{x:Null}"/>
+                            <Condition Binding="{Binding Progressing}" Value="True"/>
+                          </MultiDataTrigger.Conditions>
+                          <Setter Property="Content" Value="{Binding}"/>
+                          <Setter Property="ContentTemplate" Value="{StaticResource _OperationCancelButtonTemplate}"/>
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding Parent}" Value="{x:Null}"/>
+                            <Condition Binding="{Binding Progressing}" Value="False"/>
+                          </MultiDataTrigger.Conditions>
+                          <Setter Property="Content" Value="{Binding}"/>
+                          <Setter Property="ContentTemplate" Value="{StaticResource _OperationRemoveButtonTemplate}"/>
+                        </MultiDataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </ContentControl.Style>
+                </ContentControl>
+              </Grid>
+            </bwc:OperationInlinePanel>
+
+            <!-- Responsive display: the inline values are created only in Responsive mode. -->
+            <Control Grid.Row="1" Focusable="False" IsTabStop="False">
+              <Control.Style>
+                <Style TargetType="Control">
+                  <Setter Property="Visibility" Value="Collapsed"/>
+                  <Style.Triggers>
+                    <DataTrigger Value="Responsive"
+                                 Binding="{Binding OperationDisplay,
+                                                   RelativeSource={RelativeSource
+                                                     AncestorType=bwc:OperatorControl}}">
+                      <Setter Property="Visibility" Value="Visible"/>
+                      <Setter Property="Template" Value="{StaticResource _OperationInlineTemplate}"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Control.Style>
+            </Control>
+
+            <ContentPresenter Grid.Row="2"
                               Content="{Binding ChildSource}"
                               ContentTemplate="{Binding
                                 Path=OperationItemsTemplate,
                                 RelativeSource={RelativeSource AncestorType=bwc:OperatorControl},
                                 TargetNullValue={StaticResource _OperationItemsTemplateDefault}}"/>
           </Grid>
+          <!--
+            Responsive display: template triggers collapse column cells only while their values are shown
+            beneath the operation, so a consumer's implicit cell style otherwise controls their visibility.
+          -->
+          <DataTemplate.Triggers>
+            <DataTrigger Value="True"
+                         Binding="{Binding AreProgressRatesInline,
+                                           RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}">
+              <Setter TargetName="_OperationProgressRateCell" Property="Visibility" Value="Collapsed"/>
+              <Setter TargetName="_OperationProgressRateAverageCell" Property="Visibility" Value="Collapsed"/>
+            </DataTrigger>
+            <DataTrigger Value="True"
+                         Binding="{Binding IsProgressInline,
+                                           RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}">
+              <Setter TargetName="_OperationProgressCell" Property="Visibility" Value="Collapsed"/>
+              <Setter TargetName="_OperationTargetCell" Property="Visibility" Value="Collapsed"/>
+            </DataTrigger>
+            <DataTrigger Value="True"
+                         Binding="{Binding IsDataInline,
+                                           RelativeSource={RelativeSource AncestorType=bwc:OperatorControl}}">
+              <Setter TargetName="_OperationDataCell" Property="Visibility" Value="Collapsed"/>
+            </DataTrigger>
+          </DataTemplate.Triggers>
         </DataTemplate>
       </Grid.Resources>
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto"/>
         <RowDefinition/>
       </Grid.RowDefinitions>
+      <!--
+        Responsive display: hosts a hidden progress bar, created only in Responsive mode, that resolves
+        the row progress bar style in this resource scope to size the progress bar column.
+      -->
+      <Decorator x:Name="PART_OperationProgressBarProbeHost" Visibility="Collapsed"/>
       <Grid Grid.Row="0" ClipToBounds="True">
         <Grid x:Name="PART_OperationHeaderGrid">
           <Grid.Resources>
@@ -278,6 +527,7 @@
             <ColumnDefinition Width="100" SharedSizeGroup="Command"/>
           </Grid.ColumnDefinitions>
           <ContentControl Grid.Column="0"
+                          x:Name="_OperationDepthHeader"
                           Content=""
                           ContentTemplate="{Binding
                             OperationDepthHeaderTemplate,
@@ -286,6 +536,7 @@
                             TargetNullValue={StaticResource
                               _OperationDepthHeaderTemplateDefault}}"/>
           <ContentControl Grid.Column="1"
+                          x:Name="_OperationNameHeader"
                           Content="Name"
                           ContentTemplate="{Binding
                             OperationNameHeaderTemplate,
@@ -294,6 +545,7 @@
                             TargetNullValue={StaticResource
                               _OperationNameHeaderTemplateDefault}}"/>
           <ContentControl Grid.Column="2"
+                          x:Name="_OperationDataHeader"
                           Content="Data"
                           ContentTemplate="{Binding
                             OperationDataHeaderTemplate,
@@ -302,6 +554,7 @@
                             TargetNullValue={StaticResource
                               _OperationDataHeaderTemplateDefault}}"/>
           <ContentControl Grid.Column="3"
+                          x:Name="_OperationProgressHeader"
                           Content="Progress"
                           ContentTemplate="{Binding
                             OperationProgressHeaderTemplate,
@@ -310,6 +563,7 @@
                             TargetNullValue={StaticResource
                               _OperationProgressHeaderTemplateDefault}}"/>
           <ContentControl Grid.Column="4"
+                          x:Name="_OperationProgressRateHeader"
                           Content="Rate"
                           ContentTemplate="{Binding
                             OperationProgressRateHeaderTemplate,
@@ -318,6 +572,7 @@
                             TargetNullValue={StaticResource
                               _OperationProgressRateHeaderTemplateDefault}}"/>
           <ContentControl Grid.Column="5"
+                          x:Name="_OperationProgressRateAverageHeader"
                           Content="Average"
                           ContentTemplate="{Binding
                             OperationProgressRateAverageHeaderTemplate,
@@ -326,6 +581,7 @@
                             TargetNullValue={StaticResource
                               _OperationProgressRateAverageHeaderTemplateDefault}}"/>
           <ContentControl Grid.Column="6"
+                          x:Name="_OperationTargetHeader"
                           Content="Target"
                           ContentTemplate="{Binding
                             OperationTargetHeaderTemplate,
@@ -349,6 +605,22 @@
                             TargetNullValue={StaticResource _OperationItemsTemplateDefault}}"/>
       </ScrollViewer>
     </Grid>
+    <!-- Responsive display: collapse header cells only while their values are shown beneath operations. -->
+    <ControlTemplate.Triggers>
+      <DataTrigger Value="True" Binding="{Binding AreProgressRatesInline, RelativeSource={RelativeSource Self}}">
+        <Setter TargetName="_OperationProgressRateHeader" Property="Visibility" Value="Collapsed"/>
+        <Setter TargetName="_OperationProgressRateAverageHeader" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+      <DataTrigger Value="True" Binding="{Binding IsProgressInline, RelativeSource={RelativeSource Self}}">
+        <Setter TargetName="_OperationProgressHeader" Property="Visibility" Value="Collapsed"/>
+        <Setter TargetName="_OperationTargetHeader" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+      <DataTrigger Value="True" Binding="{Binding IsDataInline, RelativeSource={RelativeSource Self}}">
+        <Setter TargetName="_OperationDepthHeader" Property="Visibility" Value="Collapsed"/>
+        <Setter TargetName="_OperationNameHeader" Property="Visibility" Value="Collapsed"/>
+        <Setter TargetName="_OperationDataHeader" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+    </ControlTemplate.Triggers>
   </ControlTemplate>
   <Style TargetType="{x:Type bwc:OperatorControl}" x:Key="OperatorControlStyle" >
   </Style>

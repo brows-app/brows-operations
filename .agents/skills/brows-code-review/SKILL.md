@@ -11,8 +11,7 @@ Produce accurate, actionable reviews using the repository conventions.
 
 ## Review ownership
 
-The current agent must perform the review itself. Do not delegate the review task to a subagent, regardless of the
-current model or reasoning effort.
+The current agent must perform the review itself. Do not delegate the review task to a subagent.
 
 ## Choose the task and establish scope
 
